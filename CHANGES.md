@@ -154,5 +154,15 @@ Earlier change-log entry called this a cosmetic bug ("'B' as decimal separator")
 
 `show_normal` now has two `.db` lines (one for closed, one for open) — selected by an early `lds w, window_open / tst / brne show_normal_open`. Both stay at 16 chars to fully overwrite the previous content.
 
+### `main.asm` — fix: preserve temperature across PRINTF in overflow0
+Bug: changing the target in SET mode didn't actually update the window — e.g. with temp=28 °C and target=25, the window stayed `Closed` instead of auto-opening.
+
+Cause: `PRINTF` with `FFRAC2` modifies `a0..a3` while formatting (sign-extension, divide-by-10 per digit, etc.). The ISR read the temperature into `a1:a0`, printed it with `PRINTF "Temp: …,a,…"`, then did the threshold compare via `mov b0, a0 / mov b1, a1` — except by then `a1:a0` was garbage from PRINTF, not the real temperature. The compare was effectively comparing random bits against the consigne, giving a random N flag and a random open/close decision.
+
+Fix: push `a0` / `a1` before the PRINTF call and pop them back afterwards (after the convertT trigger). The threshold compare further down now reads the true measured temperature.
+
+### `main.asm` — line 2 cosmetics: dots after value and state
+`Set:25C Closed  ` → `Set:25C. Closed.` (and similarly `Set:25C. Open.  ` / `Set:25C. <EDIT>.`). Easier to parse visually. All still padded to exactly 16 chars so each frame fully overwrites the previous.
+
 ### Known remaining issues
 - `open_window` / `close_window` still only flip the `window_open` SRAM byte. R has to wire up the servo PWM on PORTB.4 (M4) to make the window physically move.

@@ -250,11 +250,18 @@ overflow0:
 	rcall	wire1_read			; MSB -> a0
 	mov	a1, a0
 	mov	a0, c0				; a1:a0 = temperature (format DS18B20)
+
+	; PRINTF/FFRAC2 modifie a0..a3 pendant le formatage,
+	; on sauvegarde la temperature pour le compare plus bas
+	push	a0
+	push	a1
 	PRINTF	LCD
 .db	"Temp: ",FFRAC2+FSIGN,a,4,$22," C  ",CR,0
 	rcall	wire1_reset			; lance la prochaine conversion
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
+	pop	a1				; recupere la temperature
+	pop	a0
 
 	; --- controle fenetre par seuil (skip en SLEEP) ---
 	lds	w, mode_var
@@ -340,17 +347,17 @@ show_normal:
 	tst	w
 	brne	show_normal_open
 	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C Closed  ",0
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C. Closed.",0
 	ret
 show_normal_open:
 	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C Open    ",0
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C. Open.  ",0
 	ret
 
 show_set:
 	rcall	LCD_lf
 	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C <EDIT>  ",0
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C. <EDIT>.",0
 	ret
 
 show_sleep:
