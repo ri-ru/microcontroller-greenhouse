@@ -18,13 +18,26 @@
 .equ	rc5_cmd		= 0x0263	; derniere commande RC5
 .equ	rc5_new		= 0x0264	; flag: 1 = commande fraiche
 
-; === RC5 button codes (a confirmer avec la telecommande) ===
-.equ	KEY_SET		= 0x12
-.equ	KEY_UP		= 0x20
-.equ	KEY_DOWN	= 0x21
-.equ	KEY_POWER	= 0x0c
-.equ	KEY_OPEN	= 0x10
-.equ	KEY_CLOSE	= 0x11
+; === RC5 button codes (Vivanco UR Z2, releves le 2026-05-25) ===
+; bouton    code   usage
+; ------    ----   -----
+; 0..9      00..09 -
+; -/--      0x0a   libre
+; POWER     0x0c   toggle SLEEP
+; MUTE      0x0d   libre
+; VOL+      0x10   OPEN  (fenetre)
+; VOL-      0x11   CLOSE (fenetre)
+; CH+       0x20   UP    (consigne)
+; CH-       0x21   DOWN  (consigne)
+; GUIDE     0x22   libre
+; AV        0x38   SET   (entree/sortie mode SET)
+; SET/TV/DVB/FAV : pas d'emission RC5 (boutons de config remote)
+.equ	KEY_SET		= 0x38		; AV
+.equ	KEY_UP		= 0x20		; CH+
+.equ	KEY_DOWN	= 0x21		; CH-
+.equ	KEY_POWER	= 0x0c		; POWER
+.equ	KEY_OPEN	= 0x10		; VOL+
+.equ	KEY_CLOSE	= 0x11		; VOL-
 
 ; === interrupt vector table ===
 .org	0
