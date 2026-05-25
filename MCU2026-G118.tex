@@ -1,0 +1,337 @@
+\documentclass[11pt]{article}
+\usepackage{graphicx}
+\usepackage[a4paper, margin=2cm]{geometry}
+\usepackage{multicol}
+\usepackage{booktabs}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+
+\begin{document}
+
+
+\title{Rapport de projet}
+\author{Veronika Wannack \and Raphaëlle Wohrer}
+\date{26.05.2026}
+\maketitle
+
+\section{Description générale}
+
+Le projet implémente le contrôle d'une mini-serre à base de l'ATmega128L sur kit STK-300. La température interne est mesurée par un capteur Dallas DS18B20 (bus 1-wire) et comparée à une consigne réglable par l'utilisateur. Lorsque la température dépasse la consigne, une fenêtre motorisée par servo s'ouvre automatiquement ; elle se referme une fois la température redescendue. L'utilisateur interagit avec le système via une télécommande infrarouge Vivanco UR Z2 (protocole RC5) et un afficheur LCD 2×16 affiche l'état courant.
+
+Il y a trois modes de fonctionnement :
+
+NORMAL : régulation automatique selon la consigne.
+SET : réglage de la consigne par les touches haut/bas.
+SLEEP : régulation suspendue, fenêtre forcée fermée.
+
+Périphériques utilisés : télécommande IR RC5 (obligatoire) + LCD 2×16 + servomoteur Futaba S3003 + capteur DS18B20 (1-wire). 
+
+
+
+  
+
+\section{Manuel d'utilisation}
+
+
+À la mise sous tension, le LCD affiche pendant 2 s un message d'accueil (Hello gardener!), puis le système entre en mode NORMAL avec une consigne par défaut de 25 °C. Lors d'un appui sur POWER, un message « Sleeping... » est affiché pendant 2 s puis l'écran est entièrement effacé : la régulation est suspendue et l'ISR Timer0 ignore les overflows tant qu'on reste en SLEEP. Un nouvel appui sur POWER rejoue le même message d'accueil avant de reprendre le mode NORMAL. La télécommande commande l'ensemble du système :
+
+\begin{table}[h]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lclll@{}}
+\toprule
+\textbf{Touche} & \textbf{Code RC5} & \textbf{Effet en NORMAL} & \textbf{Effet en SET} & \textbf{Effet en SLEEP} \\
+\midrule
+AV     & \texttt{0x38} & Entre en mode SET                & Retour en NORMAL     & --                \\
+CH +   & \texttt{0x20} & --                               & Augmente la consigne & --                \\
+CH --  & \texttt{0x21} & --                               & Diminue la consigne  & --                \\
+VOL +  & \texttt{0x10} & Ouverture manuelle de la fenêtre & --                   & --                \\
+VOL -- & \texttt{0x11} & Fermeture manuelle de la fenêtre & --                   & --                \\
+POWER  & \texttt{0x0c} & Entre en mode SLEEP              & Entre en mode SLEEP  & Retour en NORMAL  \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Codes RC5 et effets des touches selon le mode}
+\label{tab:rc5_codes}
+\end{table}
+
+Les codes ont été relevés directement sur la télécommande à l'aide d'un mode de capture (affichage temporaire du dernier code reçu sur le LCD). La touche physique « SET » du Vivanco UR Z2 n'émet aucun signal RC5 (c'est la touche de configuration interne de la télécommande universelle) : la fonction SET du programme a donc été affectée à la touche « AV », isolée des autres et peu sujette à confusion.
+
+La consigne est bornée entre 5 °C et 40 °C. Entrer en mode SLEEP force la fenêtre fermée.
+
+\subsection{Description technique du matériel}
+
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Port / pin} & \textbf{Direction} & \textbf{Rôle} \\
+\midrule
+PE7             & entrée   & sortie du récepteur IR (TSOP, M2) \\
+PB4             & sortie   & commande PWM du servo (M4) \\
+PB5             & E/S      & ligne DQ du DS18B20 (1-wire, M5) \\
+\texttt{0x8000} & écriture & LCD instruction register (mappé) \\
+\texttt{0xC000} & écriture & LCD data register (mappé) \\
+\bottomrule
+\end{tabular}
+\caption{Affectation des ports et adresses mappées}
+\label{tab:port_pin}
+\end{table}
+
+L'afficheur LCD HD44780U est accédé via le bus de SRAM externe ; le bit SRE de MCUCR est mis à 1 à l'initialisation.
+
+\subsection{Méthodes d'interruption}
+
+Deux sources d'interruption sont utilisées :
+
+INT7 (PE7, front descendant) déclenche le décodage RC5. Le récepteur IR maintient la ligne haute au repos ; un front descendant marque le début d'une trame RC5. L'ISR (\texttt{rc5\_isr}, dans \texttt{ir\_rc5.asm}) échantillonne 14 bits, stocke la commande décodée dans \texttt{rc5\_cmd} et lève le drapeau \texttt{rc5\_new}. Le drapeau INTF7 est explicitement réinitialisé avant \texttt{reti} car les fronts intermédiaires du codage Manchester l'auraient mis à 1 pendant le décodage.
+
+Timer0 (overflow) déclenche la lecture périodique de la température sur le DS18B20 et le contrôle de la fenêtre. Configuré en mode asynchrone (\texttt{ASSR} $\leftarrow$ \texttt{(1{<}{<}AS0)}, source quartz 32~kHz externe), prescaler 128 (\texttt{TCCR0 = 5}), l'overflow survient environ une fois par seconde ($32\,768 / 128 / 256 \approx 1$~Hz). L'ISR (\texttt{overflow0}, dans \texttt{thermo.asm}) lit la température, affiche la valeur sur la ligne 2 du LCD, lance la prochaine conversion, recharge la consigne courante depuis la SRAM et applique la logique de régulation (ouverture / fermeture de la fenêtre).
+
+La boucle principale tourne quant à elle en polling coopératif : elle consulte les drapeaux \texttt{rc5\_new} (posé par l'ISR INT7) et les valeurs de température (mises à jour par l'ISR Timer0), puis dispatche selon le mode courant. Ce choix d'architecture coopérative est justifié : aucun traitement long ne bloque la boucle, les seules attentes critiques ($1/4$ et $T_1$ d'un bit RC5) sont confinées dans l'ISR INT7, et la cadence de mise à jour du DS18B20 (750~ms) absorbe largement les ${\sim}25$~ms du décodage RC5.
+
+
+\subsection{Top-down fonctionnement}
+
+L'architecture du programme repose sur trois acteurs qui communiquent exclusivement via la SRAM partagée (figure~\ref{fig:topdown}). Les deux ISR sont les seules sources d'événements asynchrones : l'ISR INT7 décode une trame RC5 et dépose la commande dans \texttt{rc5\_cmd} en levant le drapeau \texttt{rc5\_new}, tandis que l'ISR Timer0 lit périodiquement le DS18B20, met à jour la température en SRAM et applique la régulation thermique. Aucune des deux ne déclenche directement un traitement applicatif --- elles se contentent de muter l'état partagé puis rendent la main.
+
+La boucle principale (\texttt{main loop}) tourne en polling coopératif : elle interroge \texttt{rc5\_new} et l'état courant, puis appelle \texttt{dispatch} qui aiguille vers le handler du mode actif (\texttt{do\_normal}, \texttt{do\_set} ou \texttt{do\_sleep}). Ce sont ces handlers qui effectuent les actions visibles par l'utilisateur : ouverture/fermeture manuelle de la fenêtre, ajustement de la consigne (\texttt{target\_up} / \texttt{target\_down}), ou transitions de mode.
+
+Ce découplage ISR $\rightarrow$ état partagé $\rightarrow$ dispatcher garantit que les ISR restent courtes et déterministes (aucune attente bloquante hors des $T_1$ critiques du décodage RC5), tout en laissant à la boucle principale la responsabilité de la logique applicative et du séquencement des affichages.
+
+% \begin{figure}[h]
+%   \centering
+%   \includegraphics[width=0.8\textwidth]{topdown.png}
+%   \caption{Architecture top-down : ISRs, état SRAM partagé, dispatcher et handlers de mode.}
+%   \label{fig:topdown}
+% \end{figure}
+
+\subsection{Présentation des modules}
+
+Le point d'entrée du build Atmel Studio est \texttt{main.asm} ; il configure les vecteurs d'interruption à \texttt{INT7addr} et \texttt{OVF0addr} puis intègre les autres fichiers via \texttt{.include} dans l'ordre suivant : pilotes du cours (\texttt{lcd.asm}, \texttt{printf.asm}, \texttt{wire1.asm}), modules applicatifs (\texttt{ir\_rc5.asm}, \texttt{servo.asm}, \texttt{thermo.asm}), puis \texttt{display.asm}. Cette séparation par module fonctionnel --- un fichier par périphérique ou par responsabilité logique --- facilite la lecture et permet à chacun des deux membres du groupe de travailler sur son fichier sans conflits de version. Le fichier \texttt{wire1\_temp2.asm} (présent dans le dossier projet) est un programme de test autonome conservé comme référence pendant le développement ; il ne fait pas partie de l'application finale.
+
+Le code développé est réparti en cinq fichiers. \texttt{main.asm} contient le reset, les vecteurs d'interruption, la boucle principale et la machine à états (\texttt{dispatch}, \texttt{do\_normal/set/sleep}, transitions, \texttt{target\_up/down}). \texttt{ir\_rc5.asm} implémente l'ISR de décodage RC5 (INT7) avec un filtre d'auto-répétition par bit toggle. \texttt{thermo.asm} contient l'ISR Timer0 (\texttt{overflow0}) qui lit le DS18B20, affiche la température sur la ligne 2 du LCD et déclenche l'ouverture ou la fermeture de la fenêtre selon le seuil. \texttt{servo.asm} expose \texttt{open\_window} et \texttt{close\_window}, qui pilotent le servo en PWM. Enfin, \texttt{display.asm} regroupe les routines d'affichage (\texttt{lcd\_refresh}, \texttt{show\_normal/set/sleep}, \texttt{do\_splash}).
+
+Les fichiers fournis par le cours sont utilisés sans modification : \texttt{lcd.asm} (pilote HD44780U), \texttt{printf.asm} (impression formatée), \texttt{wire1.asm} (pilote 1-wire bas niveau), \texttt{macros.asm} (macros AVR générales) et \texttt{definitions.asm} (définitions de registres, ports et constantes).
+
+
+
+
+\section{Rapport technique}
+
+\subsection{Télécommande IR (RC5)}
+
+Le codage RC5 transmet 14 bits en Manchester sur une porteuse 36~kHz : 2 bits de start (MSB), 1 bit toggle, 5 bits d'adresse, 6 bits de commande (LSB). Le récepteur (module M2) délivre l'enveloppe démodulée sur PE7, au repos à l'état haut.
+
+\paragraph{Accès.} Interruption externe INT7 configurée sur front descendant (\texttt{EICRB $\leftarrow$ (1{<}{<}ISC71)}), activée dans \texttt{EIMSK}. Le premier front descendant de la trame déclenche \texttt{rc5\_isr}. L'ISR attend $T_1/4$ (échantillonnage au milieu du premier bit), puis échantillonne PE7 toutes les $T_1$, accumulant les 14 bits dans le registre 2 octets \texttt{b1:b0} via \texttt{P2C} (Pin-to-Carry) et \texttt{ROL2}. À la fin, le registre est complémenté (\texttt{com b0}), la commande déposée dans \texttt{rc5\_cmd} (SRAM), et le drapeau \texttt{rc5\_new} levé. Le flag INTF7 est ensuite explicitement effacé (\texttt{OUTI EIFR, (1{<}{<}INTF7)}) car les transitions Manchester intermédiaires l'ont armé pendant le décodage.
+
+\paragraph{Calibration.} La constante $T_1$ fixe la durée d'un bit RC5 utilisée pour l'échantillonnage. Le $T_1$ par défaut de 1870~µs s'est avéré adéquat pour notre paire MCU/télécommande : tous les codes des boutons utilisés se décodent correctement et de façon stable, sans nécessiter de calibration supplémentaire à l'oscilloscope.
+
+\paragraph{Filtrage de l'auto-répétition.} Le protocole RC5 réémet la trame toutes les ${\sim}114$~ms tant qu'une touche est maintenue, et une pression brève suffit en général à émettre 2 trames consécutives. Sans filtrage, chaque pression déclenche donc deux fois le dispatcher (la consigne s'incrémente de 2 au lieu de 1, par exemple). Le bit \textit{toggle} de RC5 (bit 11 de la trame de 14 bits) bascule à chaque nouvelle pression mais reste identique pendant l'auto-répétition. Après les 14 \texttt{ROL2} du décodeur, il se trouve en bit 3 de \texttt{b1} ; sa valeur est sauvegardée en SRAM (\texttt{rc5\_last\_tog}) puis comparée à chaque nouvelle trame. \texttt{rc5\_new} n'est levé que si le toggle a changé.
+
+\paragraph{Sauvegarde du contexte.} L'ISR sauvegarde SREG (dans \texttt{\_sreg}/r1) et empile les registres qu'elle modifie (\texttt{w}, \texttt{u}, \texttt{b0}, \texttt{b1}, \texttt{b2}), puis les restaure avant \texttt{reti}. La variable de filtrage \texttt{rc5\_last\_tog} est en SRAM, indépendante des registres.
+
+\subsection{Affichage LCD (HD44780U)}
+
+L'afficheur 2$\times$16 est accessible en SRAM mappée : le registre d'instruction à l'adresse \texttt{0x8000} et le registre de données à \texttt{0xC000}. L'accès SRAM externe est activé en initialisation (\texttt{MCUCR $\leftarrow$ (1{<}{<}SRE)|(1{<}{<}SRW10)}).
+
+La librairie \texttt{lcd.asm} fournie est utilisée telle quelle : \texttt{LCD\_init}, \texttt{LCD\_home}, \texttt{LCD\_wr\_dr} (via \texttt{LCD\_putc}), avec gestion des codes spéciaux CR et LF (passage à la ligne 2 à l'adresse \texttt{0x40}). L'impression formatée passe par \texttt{PRINTF LCD} (librairie \texttt{printf.asm}) qui appelle \texttt{LCD\_putc} pour chaque caractère ; les valeurs (consigne, état fenêtre) sont lues depuis la SRAM (adresses \texttt{0x0260+}) au moyen du formateur FDEC.
+
+\paragraph{Partage de l'écran entre la boucle principale et l'ISR Timer0.} L'afficheur n'a qu'un seul curseur matériel : si la boucle principale et l'ISR écrivaient toutes deux n'importe où, leurs séquences ``positionnement + caractères'' s'entrecroiseraient et la position courante se retrouverait corrompue. L'écran a donc été partitionné :
+
+\begin{itemize}
+  \item \textbf{Ligne 1} (haut) appartient à \texttt{lcd\_refresh} : \texttt{LCD\_home} puis \texttt{PRINTF} du contenu propre au mode (\texttt{Set:25C. Closed.} en NORMAL, \texttt{Set:25C. <EDIT>.} en SET, \texttt{Sleeping...} en SLEEP).
+  \item \textbf{Ligne 2} (bas) appartient à \texttt{overflow0} : \texttt{LCD\_lf} (déplacement curseur en début de ligne 2, sans toucher la ligne 1) puis \texttt{PRINTF "Temp: XX.XX C"}, environ une fois par seconde.
+\end{itemize}
+
+Le positionnement est donc déterministe : les deux écrivains utilisent des points d'entrée différents (\texttt{LCD\_home} vs \texttt{LCD\_lf}) et ne se disputent pas la position du curseur.
+
+Comme la boucle principale tourne très vite (plusieurs milliers d'itérations par seconde) tandis que le rafraîchissement n'est nécessaire qu'aux changements d'état (${\sim}$quelques fois par minute), un drapeau \texttt{lcd\_dirty} (SRAM \texttt{0x0266}) signale à \texttt{lcd\_refresh} quand redessiner. Le drapeau est levé par chaque transition de mode, chaque ajustement de consigne, et chaque appel à \texttt{open\_window} / \texttt{close\_window} (qu'il provienne de la télécommande ou de l'ISR de régulation). Le reste du temps, \texttt{lcd\_refresh} constate \texttt{lcd\_dirty=0} et retourne immédiatement sans toucher au LCD. Cela évite que la boucle principale ne ``martèle'' l'écran en permanence et n'entre en collision avec l'écriture de la ligne 2 par l'ISR.
+
+Chaque routine d'affichage (\texttt{show\_normal}, \texttt{show\_set}, \texttt{show\_sleep}) remplit toujours 16 caractères pour la ligne 1 afin que l'image précédente soit intégralement écrasée.
+
+\subsection{Capteur de température DS18B20 (1-wire)}
+
+Le DS18B20 est un capteur de température numérique sur bus 1-wire, connecté à la ligne DQ du module M5 (PORTB). Le bus est piloté en mode bit-bang par la librairie fournie \texttt{wire1.asm} (\texttt{wire1\_init}, \texttt{wire1\_reset}, \texttt{wire1\_write}, \texttt{wire1\_read}).
+
+\paragraph{Cadence de lecture.} Timer0 fonctionne en mode asynchrone à partir du quartz externe 32~kHz (\texttt{ASSR = (1{<}{<}AS0)}, \texttt{TCCR0 = 5} qui correspond au prescaler 128, \texttt{TIMSK = (1{<}{<}TOIE0)}). L'overflow se produit à $32\,768 / 128 / 256 \approx 1$~Hz, ce qui dépasse largement le temps de conversion du DS18B20 (750~ms en résolution 12 bits).
+
+\paragraph{Séquence dans \texttt{overflow0}.} À chaque overflow, l'ISR commence par tester \texttt{mode\_var} : si l'application est en SLEEP, l'ISR restaure immédiatement SREG/\texttt{w} et fait \texttt{reti} sans même empiler les autres registres ni interroger le capteur. L'écran reste vide et le bus 1-wire n'est pas sollicité. En dehors du mode SLEEP, la séquence complète est :
+
+\begin{enumerate}
+  \item lit le scratchpad : \texttt{wire1\_reset}, commande \texttt{skipROM}, commande \texttt{readScratchpad}, deux \texttt{wire1\_read} successifs pour récupérer LSB puis MSB de la température. Le résultat est placé dans \texttt{a1:a0}, signed 16 bits au format DS18B20 (1/16~°C par LSB) ;
+  \item l'affiche en ligne 2 (bas) du LCD via \texttt{PRINTF "Temp: ",FFRAC2+FSIGN,a,4,\$22," C "} (le format \texttt{FFRAC2} avec le point décimal à la position 4 prend directement en compte les 4 bits fractionnaires du DS18B20 ; \texttt{\$22} demande 2 chiffres entiers et 2 chiffres décimaux). La température \texttt{a1:a0} est sauvegardée sur la pile avant le \texttt{PRINTF} car le formateur modifie \texttt{a0..a3} pendant le formatage, puis restaurée pour la comparaison à la consigne ;
+  \item relance immédiatement la conversion suivante : \texttt{wire1\_reset}, \texttt{skipROM}, \texttt{convertT} ;
+  \item recharge la consigne dans \texttt{b3:b2} depuis la SRAM (\texttt{b3:b2 = target\_temp $\times$ 16}, via quatre \texttt{lsl b2 / rol b3} ; le facteur 16 convertit les degrés Celsius vers le format brut du DS18B20). La consigne est ainsi toujours à jour si l'utilisateur l'a modifiée en mode SET. Compare ensuite \texttt{a1:a0} à \texttt{b3:b2} ; le résultat $a - b$ met à jour le flag N de SREG ;
+  \item décide de l'action sur la fenêtre :
+    \begin{itemize}
+      \item $\text{temp} \geq \text{consigne}$ (N = 0) : ouvrir la fenêtre si elle est fermée ;
+      \item $\text{temp} < \text{consigne}$ (N = 1) : fermer la fenêtre si elle est ouverte ;
+      \item en mode SLEEP, cette étape 4--5 est sautée intégralement et la fenêtre reste à l'état où SLEEP l'a forcée (fermée).
+    \end{itemize}
+\end{enumerate}
+
+Le déclenchement est \textit{edge-triggered} (action uniquement quand l'état de la fenêtre doit effectivement changer), ce qui évite d'envoyer inutilement une commande au servo à chaque overflow.
+
+\paragraph{Sauvegarde du contexte.} L'ISR sauvegarde SREG dans \texttt{\_sreg} (r1) et empile tous les registres modifiés par les appels qu'elle effectue (LCD, PRINTF, wire1) ainsi que \texttt{b2}, \texttt{b3} désormais recalculés à chaque overflow : \texttt{w, u, char, e0, e1, c0, a0..a3, b0, b1, b2, b3, X, Y, Z}.
+
+\subsection{Servomoteur Futaba S3003}
+
+Le servo Futaba S3003 (module M4) est commandé par un signal PWM appliqué sur la broche \texttt{PB4} du STK-300. Le signal PWM est défini par deux paramètres : une période fixée à 20~ms (50~Hz) et une largeur d'impulsion variable comprise entre environ 1~ms et 2~ms, qui détermine la position angulaire du servo (1~ms $\approx 0°$, 1,5~ms $\approx 90°$ (neutre), 2~ms $\approx 180°$).
+
+Deux positions sont utilisées dans le projet :
+
+\begin{itemize}
+  \item \textbf{Fenêtre fermée} : largeur d'impulsion proche de 1~ms, butée gauche du servo ;
+  \item \textbf{Fenêtre ouverte} : largeur d'impulsion proche de 2~ms, butée droite.
+\end{itemize}
+
+Les sous-routines \texttt{open\_window} et \texttt{close\_window} (dans \texttt{servo.asm}) constituent le point d'entrée unique de la commande servo : elles sont appelées soit par la boucle principale en réponse à un appui sur \texttt{VOL+}/\texttt{VOL-} de la télécommande (commande manuelle), soit par l'ISR Timer0 en fonction du résultat de la comparaison \texttt{temp} vs \texttt{consigne} (régulation automatique). Les deux mettent également à jour la variable d'état \texttt{window\_open} en SRAM et lèvent \texttt{lcd\_dirty} pour déclencher le rafraîchissement de la ligne d'état (ligne 1) du LCD.
+
+\textit{(Implémentation détaillée du PWM logiciel --- choix du timer auxiliaire, des constantes de largeur d'impulsion par butée mécanique --- à compléter par R après la calibration finale sur l'établi.)}
+
+\subsection{Allocations mémoire}
+
+\paragraph{Mémoire programme (Flash).} Vecteur reset à \texttt{0x0000}, vecteur INT7 à \texttt{0x0010} (\texttt{INT7addr}), vecteur Timer0 overflow à \texttt{0x0020} (\texttt{OVF0addr}). Le code utilisateur commence après la table de vecteurs.
+
+\paragraph{Mémoire de données (SRAM interne).} Variables d'état placées dans la plage compatible avec \texttt{printf} (\texttt{0x0260}--\texttt{0x02FF}) :
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llcp{7cm}@{}}
+\toprule
+\textbf{Adresse} & \textbf{Symbole} & \textbf{Taille} & \textbf{Contenu} \\
+\midrule
+\texttt{0x0260} & \texttt{mode\_var}     & 1 o & mode courant (0=NORMAL, 1=SET, 2=SLEEP) \\
+\texttt{0x0261} & \texttt{target\_temp}  & 1 o & consigne en °C (5..40) \\
+\texttt{0x0262} & \texttt{window\_open}  & 1 o & état fenêtre (0=fermée, 1=ouverte) \\
+\texttt{0x0263} & \texttt{rc5\_cmd}      & 1 o & dernier code RC5 décodé \\
+\texttt{0x0264} & \texttt{rc5\_new}      & 1 o & drapeau ``commande fraîche'' \\
+\texttt{0x0265} & \texttt{rc5\_last\_tog}& 1 o & dernier bit toggle RC5 (filtre auto-répétition) \\
+\texttt{0x0266} & \texttt{lcd\_dirty}    & 1 o & drapeau ``ligne d'état LCD à redessiner'' \\
+\bottomrule
+\end{tabular}
+\caption{Allocation SRAM des variables d'état}
+\label{tab:sram}
+\end{table}
+
+La pile est initialisée au sommet de la SRAM (\texttt{LDSP RAMEND}).
+
+\subsection{Fonctions placées en librairie}
+
+Outre les librairies du cours (\texttt{macros.asm}, \texttt{lcd.asm}, \texttt{printf.asm}, \texttt{wire1.asm}), les fonctions répétitives identifiées sont :
+
+\begin{itemize}
+  \item \texttt{dispatch} : sélection de la routine de mode par \texttt{JK} successifs.
+  \item \texttt{lcd\_refresh} : sélection de la routine d'affichage par mode.
+  \item \texttt{target\_up} / \texttt{target\_down} : ajustement borné de la consigne.
+  \item \texttt{open\_window} / \texttt{close\_window} : commande du servo, point d'entrée unique pour les déclenchements manuels et automatiques.
+\end{itemize}
+
+\subsection*{Références}
+
+\begin{enumerate}
+  \item \textit{Vivanco, Universal TV-DVB Controller UR Z2}, BDA 34873-Rev-RZ, 2013.
+  \item \textit{Vishay Semiconductors, Data Formats for IR Remote Control}, Doc. 80071 Rev. 2.2, 2019.
+  \item \textit{Vishay Semiconductors, IR Receiver Modules for Remote Control Systems}, Doc. 82459, 2016.
+  \item \textit{Maxim Integrated, DS18B20 Programmable Resolution 1-Wire Digital Thermometer}, datasheet.
+  \item \textit{Atmel, ATmega128(L) Datasheet}, document 2467.
+\end{enumerate}
+
+\newpage{ }
+\newpage{ }
+
+
+
+
+\section*{TO DELETE AFTER- guideliens }
+
+  Report MUST describe:
+  - Interrupt methods used
+  - Program memory and data memory allocations
+  - Repetitive functions identified for library use
+  (macros / subroutines)
+
+    - BUT functionalities must be demonstrated and
+  explained — well-prepared & organized
+
+   - The mandatory new peripheral: IR remote Vivanco UR
+   Z2 in RC5 format (on M2 / PORTE)
+  - At least 2 supplementary peripherals from Table
+  1.2 (LCD, UART, stepper, IR-NEC, buzzer, encoder,
+  potentiometer, BNC, PS/2, Sharp distance, servo, I²C
+   EEPROM, 1-wire temperature)
+
+
+    What the program MUST do
+
+  - ✅ Written in AVR assembler
+  - ✅ Multitask (cooperative or interrupt-based —
+  non-blocking)
+  - ✅ Modular (intelligent, reusable, well-documented
+   subroutines)
+  - ✅ Responsive (always reacts in real time)
+  - ✅ Uses interrupts — see Ambiguity below
+  - ✅ Measures/processes a value or external info,
+  and communicates a result OR controls a device
+  - ✅ Has a user interface for entering parameters
+  - ✅ Displays a result on LCD or UART terminal
+  (RealTerm or other)
+  - ✅ Uses the macros and libraries presented in the
+  course (macros.asm, definitions.asm, lcd.asm,
+  printf.asm, wire1.asm, etc.)
+
+  Method (Section 2.3) — what they recommend you do
+
+  - �� Top-down analysis on paper FIRST, before any
+  code
+  - �� Write specs → extract blocks → decompose
+  iteratively → small codeable sub-blocks
+  - �� Then write a primitive driver to confirm
+  two-way comms with the new peripheral
+  - �� Read datasheets in detail
+  - �� Verify signals with oscilloscope at every step
+  - �� Forum if stuck
+  - �� Then build up "bottom-up" — connect blocks one
+  by one
+
+  
+  Grade reduction for missing exigences — explicitly
+  called out: no interrupts/real time, files
+  unavailable on server, late submission.
+
+2.4.2 RAPPORT TECHNIQUE
+Le format du rapport est pdf, maximum 7 pages au format standard (police d’écriture de 11 points minimum,
+marges de 2 cm). Veuillez nommer le fichier en respectant le code suivant: “MCU2026-GXXX.pdf,” où
+“GXXX” désigne votre code de groupe (No. du kit), par exemple “MCU2026-G212.pdf”
+
+Les divers Sections consécutives du rapport seront adaptées aux besoins du rapport; par exemple, une liste
+de sections pourrait être:
+
+1. Page 1: Information administratives (auteurs, dates), titre, introduction et description générale de
+l’application sans schémas
+
+2. Pages 2 à 4: Mode d’emploi (mise en opération système et utilisateur), puis description technique de
+l’application et du matériel (utilisation des ports, interfaces d’acquisition et d’affichage,
+périphériques, interruptions), fonctionnement du programme (top-down), présentation des modules
+(parties indépendantes du programme)
+
+3. Pages 5 à 7: Description de détail de l’accès aux périphériques, références (conclusion non néces-
+saire).
+
+4. Pages suivantes: Annexes. Divers annexes dont une obligatoire consistant en la totalité du code
+source de l’application.
+
+Remarques
+
+Il est bien de définir déjà à ce stade de l’étude les fonctions qui sont répétitives et qui pourront être placées
+dans une librairie (macro, ou sous-routines).
+
+Les méthodes d’interruptions doivent être décrites.
+
+Les allocations de mémoire programme et données doivent être décrites
+
+
+\end{document}
