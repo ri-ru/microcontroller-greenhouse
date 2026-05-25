@@ -105,6 +105,12 @@
     <Compile Include="wire1_temp2.asm">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="thermo.asm">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="display.asm">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <Import Project="$(AVRSTUDIO_EXE_PATH)\\Vs\\Assembler.targets" />
 </Project>

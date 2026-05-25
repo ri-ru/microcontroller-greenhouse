@@ -1,7 +1,8 @@
 ; file	main.asm   target ATmega128L-4MHz-STK300
-; purpose serre: state-machine (NORMAL / SET / SLEEP), LCD, RC5 ISR
-;         RC5 decode par interruption (INT7 sur PE7),
-;         servo et temperature: parties de R (stubs ici)
+; purpose serre: state-machine (NORMAL / SET / SLEEP), boucle principale,
+;         vector table. RC5 decode dans ir_rc5.asm, temperature dans
+;         thermo.asm, servo (fenetre) dans servo.asm, affichage dans
+;         display.asm.
 
 .include "macros.asm"
 .include "definitions.asm"
@@ -45,9 +46,9 @@
 .org	0
 	jmp	reset
 .org	INT7addr
-	rjmp	rc5_isr			; RC5 (V)
+	rjmp	rc5_isr			; RC5 (V) - dans ir_rc5.asm
 .org	OVF0addr
-	rjmp	overflow0		; Timer0 overflow -> lecture temperature (R)
+	rjmp	overflow0		; Timer0 -> temperature (R) - dans thermo.asm
 
 ; --- librairies (incluses ici pour que PRINTF/LCD_* soient definis
 ;     avant reset, qui les utilise pour l'ecran d'accueil) ---
@@ -55,7 +56,9 @@
 .include "printf.asm"
 .include "wire1.asm"
 .include "ir_rc5.asm"
-.include "servo.asm"
+.include "servo.asm"			; open_window / close_window (servo PWM)
+.include "thermo.asm"			; overflow0 (lecture DS18B20 + seuil)
+.include "display.asm"			; lcd_refresh, show_*, do_splash
 
 reset:
 	LDSP	RAMEND
@@ -206,184 +209,4 @@ target_down:
 	sts	target_temp, w
 	STI	lcd_dirty, 1
 td_end:
-	ret
-
-; ==============================================================
-;  overflow0 : ISR Timer0 (lecture temperature DS18B20)
-; --------------------------------------------------------------
-;  - lit la temperature (R: code de wire1_temp2.asm intact)
-;  - affiche "temp=XX.YY C" sur la ligne 1 du LCD
-;  - declenche la conversion suivante
-;  - controle de la fenetre par seuil (skip en SLEEP) :
-;      temp >= consigne -> open_window  (si pas deja ouverte)
-;      temp <  consigne -> close_window (si pas deja fermee)
-;  - consigne rechargee a chaque overflow depuis target_temp (SRAM)
-;    -> b3:b2 = target_temp * 16  (format DS18B20, 1/16 degC)
-; ==============================================================
-overflow0:
-	in	_sreg, SREG
-	push	w
-
-	; en SLEEP: l'afficheur est eteint, on n'a rien a faire
-	lds	w, mode_var
-	cpi	w, MODE_SLEEP
-	brne	ov_active
-	pop	w
-	out	SREG, _sreg
-	reti
-
-ov_active:
-	push	u
-	push	char			; r0 (PRINTF)
-	push	e0			; r4 (PRINTF)
-	push	e1			; r5 (PRINTF)
-	push	c0			; r8 (swap LSB)
-	push	a0
-	push	a1
-	push	a2
-	push	a3
-	push	b0
-	push	b1
-	push	b2
-	push	b3
-	push	xl
-	push	xh
-	push	yl
-	push	yh
-	push	zl
-	push	zh
-
-	; --- lecture temperature DS18B20 et affichage (code R) ---
-	rcall	LCD_lf				; ligne 2 (bas)
-	rcall	wire1_reset
-	CA	wire1_write, skipROM
-	CA	wire1_write, readScratchpad
-	rcall	wire1_read			; LSB -> a0
-	mov	c0, a0
-	rcall	wire1_read			; MSB -> a0
-	mov	a1, a0
-	mov	a0, c0				; a1:a0 = temperature (format DS18B20)
-
-	; PRINTF/FFRAC2 modifie a0..a3 pendant le formatage,
-	; on sauvegarde la temperature pour le compare plus bas
-	push	a0
-	push	a1
-	PRINTF	LCD
-.db	"Temp: ",FFRAC2+FSIGN,a,4,$22," C  ",CR,0
-	rcall	wire1_reset			; lance la prochaine conversion
-	CA	wire1_write, skipROM
-	CA	wire1_write, convertT
-	pop	a1				; recupere la temperature
-	pop	a0
-
-	; --- controle fenetre par seuil (skip en SLEEP) ---
-	lds	w, mode_var
-	cpi	w, MODE_SLEEP
-	breq	ov_done
-
-	; recharger la consigne: b3:b2 = target_temp * 16 (format DS18B20)
-	lds	w, target_temp
-	ldi	b3, 0
-	mov	b2, w
-	lsl	b2
-	rol	b3
-	lsl	b2
-	rol	b3
-	lsl	b2
-	rol	b3
-	lsl	b2
-	rol	b3				; b3:b2 = target_temp << 4
-
-	; comparer temp (a1:a0) a la consigne (b3:b2)
-	mov	b0, a0
-	mov	b1, a1
-	sub	b0, b2
-	sbc	b1, b3				; b1:b0 = temp - consigne (signe)
-	brmi	ov_close			; N=1 -> temp < consigne
-
-	; temp >= consigne : ouvrir si pas deja
-	lds	w, window_open
-	tst	w
-	brne	ov_done
-	rcall	open_window
-	rjmp	ov_done
-
-ov_close:
-	lds	w, window_open
-	tst	w
-	breq	ov_done
-	rcall	close_window
-
-ov_done:
-	pop	zh
-	pop	zl
-	pop	yh
-	pop	yl
-	pop	xh
-	pop	xl
-	pop	b3
-	pop	b2
-	pop	b1
-	pop	b0
-	pop	a3
-	pop	a2
-	pop	a1
-	pop	a0
-	pop	c0
-	pop	e1
-	pop	e0
-	pop	char
-	pop	u
-	pop	w
-	out	SREG, _sreg
-	reti
-
-; === LCD refresh ===
-;  Ligne 1 (haut) = etat (mode/consigne/fenetre) -- ecrite ici, seulement
-;  quand un changement d'etat a leve lcd_dirty.
-;  Ligne 2 (bas) = "Temp: XX.XX C" -- ecrite par overflow0 (~1 fois/s).
-lcd_refresh:
-	lds	w, lcd_dirty
-	tst	w
-	breq	lr_skip
-	STI	lcd_dirty, 0
-	lds	w, mode_var
-	_JK	w, MODE_NORMAL, show_normal
-	_JK	w, MODE_SET,    show_set
-	_JK	w, MODE_SLEEP,  show_sleep
-lr_skip:
-	ret
-
-show_normal:
-	rcall	LCD_home
-	lds	w, window_open
-	tst	w
-	brne	show_normal_open
-	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C. Closed.",0
-	ret
-show_normal_open:
-	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C. Open.  ",0
-	ret
-
-show_set:
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"Set:",FDEC|FDIG2,low(target_temp),"C. <EDIT>.",0
-	ret
-
-show_sleep:
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"Sleeping...     ",0
-	ret
-
-; ecran d'accueil partage (boot + reveil de SLEEP)
-do_splash:
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"Hello gardener!",LF,"                ",0
-	WAIT_MS	2000
-	rcall	LCD_clear
 	ret
