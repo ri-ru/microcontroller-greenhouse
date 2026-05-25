@@ -241,7 +241,7 @@ overflow0:
 	push	zh
 
 	; --- lecture temperature DS18B20 et affichage (code R) ---
-	rcall	LCD_home			; ligne 1
+	rcall	LCD_lf				; ligne 2 (bas)
 	rcall	wire1_reset
 	CA	wire1_write, skipROM
 	CA	wire1_write, readScratchpad
@@ -326,9 +326,9 @@ ov_done:
 	reti
 
 ; === LCD refresh ===
-;  Ligne 1 = "temp=XX.YY C" -- ecrite par overflow0 (~1 fois/s).
-;  Ligne 2 = etat (mode/consigne/fenetre) -- ecrite ici, seulement
+;  Ligne 1 (haut) = etat (mode/consigne/fenetre) -- ecrite ici, seulement
 ;  quand un changement d'etat a leve lcd_dirty.
+;  Ligne 2 (bas) = "Temp: XX.XX C" -- ecrite par overflow0 (~1 fois/s).
 lcd_refresh:
 	lds	w, lcd_dirty
 	tst	w
@@ -342,7 +342,7 @@ lr_skip:
 	ret
 
 show_normal:
-	rcall	LCD_lf
+	rcall	LCD_home
 	lds	w, window_open
 	tst	w
 	brne	show_normal_open
@@ -355,13 +355,13 @@ show_normal_open:
 	ret
 
 show_set:
-	rcall	LCD_lf
+	rcall	LCD_home
 	PRINTF	LCD
 .db	"Set:",FDEC|FDIG2,low(target_temp),"C. <EDIT>.",0
 	ret
 
 show_sleep:
-	rcall	LCD_lf
+	rcall	LCD_home
 	PRINTF	LCD
 .db	"Sleeping...     ",0
 	ret
