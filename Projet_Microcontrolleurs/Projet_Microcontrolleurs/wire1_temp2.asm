@@ -11,13 +11,12 @@
 	rjmp	overflow0
 
 
-
-
-; === interrupt service routines === 
 .org	0x30
 .include "lcd.asm"			; include LCD driver routines
 .include "printf.asm"		; include formatted printing routines
 .include "wire1.asm"		; include Dallas 1-wire(R) routines
+
+; === interrupt service routines === 
 overflow0:
 	rcall	lcd_home			; place cursor to home position
 	rcall	wire1_reset			; send a reset pulse
@@ -38,12 +37,12 @@ overflow0:
 	mov b1, a1
 	sub b0, b2
 	sbc b1, b3
-	brbc 6, 2 ; branch if T is clear <=> the window is already open
-	brbc 2, 1 ; branch if N is clear <=> Temp > limit
-	rcall open_window
-	brbs 6, 2 ; branch if T is set <=> the window is already closed
-	brbs 2, 1 ; branch if N is set <=> Temp < limit
-	rcall open_window
+	brbc 6, PC+2 ; branch if T is clear <=> the window is already open
+	brbc 2, PC+1 ; branch if N is clear <=> Temp > limit
+	nop;rcall open_window
+	brbs 6, PC+2 ; branch if T is set <=> the window is already closed
+	brbs 2, PC+1 ; branch if N is set <=> Temp < limit
+	nop;rcall open_window
 	reti
 
 
@@ -54,8 +53,9 @@ reset:
 	rcall	wire1_init		; initialize 1-wire(R) interface
 	rcall	lcd_init		; initialize LCD
 	rjmp	main
-	;TODO : prescaler pour que overflow0 soit appelé toutes les 750ms (ou moins en changeant le registre configuration pour réduire la précision de mesure de T)
-	OUTI	TIMSK,1<<TOIE0	; Timer0 Overflow Interrupt Enable
+	OUTI	TIMSK,(1<<TOIE0)	; Timer0 Overflow Interrupt Enable
+	OUTI	ASSR,(1<<AS0)
+	OUTI	TCCR0,1
 	sei				; set global interrupt
 	ldi b2, 0b10010000
 	ldi b3, 0b00000001 ; load 25 C as limit temperature
