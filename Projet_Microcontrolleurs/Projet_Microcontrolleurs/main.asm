@@ -86,6 +86,12 @@ reset:
 	rcall	LCD_init
 	rcall	history_init			; charger min/max EEPROM -> SRAM (ou init 1er boot)
 
+	; lancer la 1ere conversion DS18B20 ICI : elle finit pendant le splash
+	; (750ms < 2s) -> evite que readT lise 85.0 C (valeur de defaut au boot)
+	rcall	wire1_reset
+	CA	wire1_write, skipROM
+	CA	wire1_write, convertT
+
 	; --- ecran d'accueil (2s avant que Timer0/RC5 ne reprennent la main) ---
 	rcall	do_splash
 
@@ -106,16 +112,11 @@ reset:
 
 	; Timer0: source asynchrone, interruption overflow active (ordre R)
 	; TCCR0=5 -> prescaler 128 -> 32768/128/256 = 1 Hz (overflow ~1s)
-	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
 	OUTI	ASSR,  (1<<AS0)
 	OUTI	TCCR0, 5
+	OUTI	TIFR,  (1<<TOV0)		; effacer flag spurieux declenche par AS0
+	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
 	sei
-
-	; premiere conversion DS18B20 (declenche la suivante depuis l'ISR)
-	; (la consigne b3:b2 est rechargee depuis target_temp dans l'ISR)
-	rcall	wire1_reset
-	CA	wire1_write, skipROM
-	CA	wire1_write, convertT
 
 	rjmp	main
 
