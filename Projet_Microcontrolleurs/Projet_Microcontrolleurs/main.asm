@@ -61,6 +61,13 @@ reset:
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
 
+	; --- ecran d'accueil (3s avant que Timer0/RC5 ne reprennent la main) ---
+	rcall	LCD_home
+	PRINTF	LCD
+.db	"Hello gardener!",0
+	WAIT_MS	3000
+	rcall	LCD_clear
+
 	; etat initial
 	STI	mode_var,    MODE_NORMAL
 	STI	target_temp, 25
@@ -242,7 +249,7 @@ overflow0:
 	mov	a1, a0
 	mov	a0, c0				; a1:a0 = temperature (format DS18B20)
 	PRINTF	LCD
-.db	"temp=",FFRAC2+FSIGN,a,4,$42,"C ",CR,0
+.db	"Temp: ",FFRAC2+FSIGN,a,4,$22," C  ",CR,0
 	rcall	wire1_reset			; lance la prochaine conversion
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
@@ -327,18 +334,25 @@ lr_skip:
 
 show_normal:
 	rcall	LCD_lf
+	lds	w, window_open
+	tst	w
+	brne	show_normal_open
 	PRINTF	LCD
-.db	"set=",FDEC|FDIG2,low(target_temp)," win=",FDEC,low(window_open),"    ",0
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C Closed  ",0
+	ret
+show_normal_open:
+	PRINTF	LCD
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C Open    ",0
 	ret
 
 show_set:
 	rcall	LCD_lf
 	PRINTF	LCD
-.db	"SET target=",FDEC|FDIG2,low(target_temp)," dC",0
+.db	"Set:",FDEC|FDIG2,low(target_temp),"C <EDIT>  ",0
 	ret
 
 show_sleep:
 	rcall	LCD_lf
 	PRINTF	LCD
-.db	"SLEEP win closed",0
+.db	"Sleeping...     ",0
 	ret

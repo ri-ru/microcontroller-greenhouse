@@ -144,5 +144,15 @@ Previously the ISR compared the temperature against `b3:b2`, which was set once 
 ### Note on PRINTF `$42`
 Earlier change-log entry called this a cosmetic bug ("'B' as decimal separator"). It is not — `_putfrac` interprets that byte as the **ii.ff format spec** (high nibble = integer digits, low nibble = fraction digits), not as a literal character. The decimal point itself is inserted by the formatter. The display will read something like `temp=  25.00C `, no rogue character.
 
+### `main.asm` — UX polish (splash + readable line 2)
+- 3-second splash on boot showing `Hello gardener!` on line 1. Inserted in `reset` right after `LCD_init`, blocking via `WAIT_MS 3000` and cleared with `LCD_clear` before Timer0/INT7 are enabled (so neither ISR can stomp the splash).
+- Line 1 (`overflow0`) reformatted: `temp=…` → `Temp:  XX.XX C  ` (using `$22` ii.ff so the integer part is 2 digits instead of 4, fits cleanly in 16 chars).
+- Line 2 (`show_*` routines) reads in plain English instead of cryptic shorthand:
+  - **NORMAL**: `Set:25C Closed  ` or `Set:25C Open    ` (branches on `window_open`)
+  - **SET**:    `Set:25C <EDIT>  `
+  - **SLEEP**:  `Sleeping...     `
+
+`show_normal` now has two `.db` lines (one for closed, one for open) — selected by an early `lds w, window_open / tst / brne show_normal_open`. Both stay at 16 chars to fully overwrite the previous content.
+
 ### Known remaining issues
 - `open_window` / `close_window` still only flip the `window_open` SRAM byte. R has to wire up the servo PWM on PORTB.4 (M4) to make the window physically move.

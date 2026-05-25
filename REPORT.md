@@ -38,9 +38,10 @@ obligatoire et 3 supplémentaires, au-delà du minimum requis.
 
 ### Mode d'emploi
 
-À la mise sous tension, le système entre en mode **NORMAL** avec une
-consigne par défaut de 25 °C. La télécommande commande l'ensemble du
-système :
+À la mise sous tension, le LCD affiche pendant 3 s un message
+d'accueil (`Hello gardener!`), puis le système entre en mode
+**NORMAL** avec une consigne par défaut de 25 °C. La télécommande
+commande l'ensemble du système :
 
 | Touche      | Code RC5 | Effet en NORMAL                   | Effet en SET            | Effet en SLEEP  |
 | ----------- | -------- | --------------------------------- | ----------------------- | --------------- |
