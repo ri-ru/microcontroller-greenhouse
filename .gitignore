@@ -1,0 +1,26 @@
+# Course materials (already on Moodle — keep repo small)
+docs/
+Starting package/
+Libraries_128L-4MHz/
+project_guidelines.pdf
+
+# Claude Code files (local helper, not project work)
+CLAUDE.md
+.claude/
+
+# Atmel Studio build output
+**/Debug/
+**/Release/
+*.obj
+*.eep
+*.elf
+*.hex
+*.lss
+*.map
+*.lst
+*.o
+
+# Visual Studio / Atmel Studio caches
+.vs/
+*.user
+*.suo
