@@ -163,9 +163,9 @@ dz_end:
 ; === transitions de mode ===
 to_normal:
 	lds	w, mode_var			; w = ancien mode
-	STI	mode_var, MODE_NORMAL
+	cpi	w, MODE_SLEEP			; tester AVANT que STI ne clobber w
+	STI	mode_var, MODE_NORMAL		; ldi/sts ne touchent pas SREG -> Z preserve
 	STI	lcd_dirty, 1
-	cpi	w, MODE_SLEEP
 	brne	tn_done				; vient de SET, pas de splash
 
 	; reveil de SLEEP : refaire le splash (LCD est deja allume, juste vide)
