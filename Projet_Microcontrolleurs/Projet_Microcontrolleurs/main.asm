@@ -23,7 +23,6 @@
 .equ	lcd_dirty	= 0x0266	; flag: 1 = ligne 2 LCD doit etre redessinee
 .equ	min_temp	= 0x0267	; mirror SRAM du min EEPROM (16-bit signe)
 .equ	max_temp	= 0x0269	; mirror SRAM du max EEPROM (16-bit signe)
-.equ	convertT_ended	= 0x026b	; flag: 1 = effectuer la sous-routine readT
 
 ; === RC5 button codes (Vivanco UR Z2, releves le 2026-05-25) ===
 ; bouton    code   usage
