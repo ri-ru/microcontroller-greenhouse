@@ -250,9 +250,12 @@ du quartz externe 32 kHz (`ASSR = (1<<AS0)`, `TCCR0 = 1`,
    gère directement la division par 16 et l'affichage de 2 décimales) ;
 3. relance immédiatement la conversion suivante :
    `wire1_reset`, `skipROM`, `convertT` ;
-4. compare `a1:a0` à la consigne (registre persistant `b3:b2`,
-   chargé à la valeur 25 °C × 16 = 0x0190 en `reset`) ; le résultat
-   `a − b` met à jour le flag N de SREG ;
+4. recharge la consigne dans `b3:b2` depuis la SRAM
+   (`b3:b2 = target_temp × 16`, via quatre `lsl b2 / rol b3` ; le
+   facteur 16 convertit les degrés Celsius vers le format brut du
+   DS18B20). La consigne est ainsi toujours à jour si l'utilisateur
+   l'a modifiée en mode SET. Compare ensuite `a1:a0` à `b3:b2` ;
+   le résultat `a − b` met à jour le flag N de SREG ;
 5. décide de l'action sur la fenêtre :
     - `temp ≥ consigne` (N = 0) : ouvrir la fenêtre si elle est
       fermée ;
@@ -267,10 +270,9 @@ inutilement une commande au servo à chaque overflow.
 
 **Sauvegarde du contexte.** L'ISR sauvegarde SREG dans `_sreg` (r1)
 et empile tous les registres modifiés par les appels qu'elle effectue
-(LCD, PRINTF, wire1) : `w, u, char, e0, e1, c0, a0..a3, b0, b1, X, Y,
-Z`. Les registres `b2`, `b3` (qui contiennent la consigne) sont
-volontairement *non* sauvegardés : ils sont initialisés une fois à
-`reset` et jamais modifiés par ailleurs.
+(LCD, PRINTF, wire1) ainsi que `b2`, `b3` désormais recalculés à
+chaque overflow : `w, u, char, e0, e1, c0, a0..a3, b0, b1, b2, b3,
+X, Y, Z`.
 
 ### Servomoteur Futaba S3003
 

@@ -138,7 +138,11 @@ The `last=XX` debug field used for button-code capture is removed (its job is do
 
 **`wire1_temp2.asm` is left untouched** — kept as R's reference / scratchpad. The actual build only uses `main.asm`'s `overflow0`.
 
+### `main.asm` — consigne re-loaded from SRAM each ISR
+Previously the ISR compared the temperature against `b3:b2`, which was set once in `reset` to `25 × 16` and never updated — so changing the target in SET mode had no effect on the auto-regulation. Fixed by deleting the boot-time `ldi b2, … / ldi b3, …` and recomputing `b3:b2 = target_temp * 16` inside `overflow0` each time, right after the SLEEP-mode skip and before the threshold compare. Four `lsl b2 / rol b3` pairs do the ×16. `b2` and `b3` are now scratch registers from the ISR's perspective, so they're added to the push/pop list.
+
+### Note on PRINTF `$42`
+Earlier change-log entry called this a cosmetic bug ("'B' as decimal separator"). It is not — `_putfrac` interprets that byte as the **ii.ff format spec** (high nibble = integer digits, low nibble = fraction digits), not as a literal character. The decimal point itself is inserted by the formatter. The display will read something like `temp=  25.00C `, no rogue character.
+
 ### Known remaining issues
 - `open_window` / `close_window` still only flip the `window_open` SRAM byte. R has to wire up the servo PWM on PORTB.4 (M4) to make the window physically move.
-- The consigne is loaded into `b3:b2` once at reset. If V changes the target in SET mode, the ISR keeps comparing against the boot-time value (25 °C). Fix is either re-reading `target_temp` from SRAM inside the ISR each overflow, or bumping `b3:b2` inside `target_up`/`target_down`. Flagged for after the demo unless we have time tonight.
-- `b` separator inside R's PRINTF format (`$42` = 'B') will probably display as `temp=+25B00C` instead of `temp=+25.00C`. Cosmetic; will fix after we see what's actually shown on hardware.

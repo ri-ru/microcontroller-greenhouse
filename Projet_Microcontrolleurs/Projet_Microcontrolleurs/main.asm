@@ -82,11 +82,8 @@ reset:
 	OUTI	TCCR0, 5
 	sei
 
-	; consigne (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
-	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
-	ldi	b3, 0b00000001
-
 	; premiere conversion DS18B20 (declenche la suivante depuis l'ISR)
+	; (la consigne b3:b2 est rechargee depuis target_temp dans l'ISR)
 	rcall	wire1_reset
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
@@ -208,7 +205,8 @@ close_window:
 ;  - controle de la fenetre par seuil (skip en SLEEP) :
 ;      temp >= consigne -> open_window  (si pas deja ouverte)
 ;      temp <  consigne -> close_window (si pas deja fermee)
-;  - b2, b3 = consigne (initialisee en reset, jamais modifiee ailleurs)
+;  - consigne rechargee a chaque overflow depuis target_temp (SRAM)
+;    -> b3:b2 = target_temp * 16  (format DS18B20, 1/16 degC)
 ; ==============================================================
 overflow0:
 	in	_sreg, SREG
@@ -224,6 +222,8 @@ overflow0:
 	push	a3
 	push	b0
 	push	b1
+	push	b2
+	push	b3
 	push	xl
 	push	xh
 	push	yl
@@ -252,6 +252,19 @@ overflow0:
 	cpi	w, MODE_SLEEP
 	breq	ov_done
 
+	; recharger la consigne: b3:b2 = target_temp * 16 (format DS18B20)
+	lds	w, target_temp
+	ldi	b3, 0
+	mov	b2, w
+	lsl	b2
+	rol	b3
+	lsl	b2
+	rol	b3
+	lsl	b2
+	rol	b3
+	lsl	b2
+	rol	b3				; b3:b2 = target_temp << 4
+
 	; comparer temp (a1:a0) a la consigne (b3:b2)
 	mov	b0, a0
 	mov	b1, a1
@@ -279,6 +292,8 @@ ov_done:
 	pop	yl
 	pop	xh
 	pop	xl
+	pop	b3
+	pop	b2
 	pop	b1
 	pop	b0
 	pop	a3
