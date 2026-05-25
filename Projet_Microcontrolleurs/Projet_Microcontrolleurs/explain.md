@@ -24,7 +24,7 @@
 ;        decodes the code, stores it in SRAM, then returns.
 ;
 ;     3. The TIMER0 INTERRUPT (every ~1 second) : reads the
-;        DS18B20 temperature sensor, prints the value on line 1
+;        DS18B20 temperature sensor, prints the value on line 2
 ;        of the LCD, and opens/closes the window depending on
 ;        whether the measured temperature is above or below the
 ;        target.
@@ -501,8 +501,8 @@ close_window:
 ;                        |
 ;                        v
 ;       +-----------------------------------+
-;       |  print "temp=XX.YY C" on LCD      |
-;       |  line 1                           |
+;       |  print "Temp: XX.XX C" on LCD     |
+;       |  line 2 (bottom)                  |
 ;       +----------------+------------------+
 ;                        |
 ;                        v
@@ -560,8 +560,15 @@ overflow0:
     push  zl
     push  zh
 
-    ; --- read temperature from DS18B20, display on LCD line 1 ---
-    rcall LCD_home                  ; move LCD cursor to row 1, col 1
+    ; --- read temperature from DS18B20, display on LCD line 2 (bottom) ---
+    rcall LCD_lf                    ; move LCD cursor to the NEXT line.
+                                    ; LCD_lf wraps : if we were on line 1, we
+                                    ; go to line 2 ; if we were already on line 2,
+                                    ; we wrap back to line 1. In practice the
+                                    ; cursor alternates between the two lines as
+                                    ; the ISR and lcd_refresh take turns calling
+                                    ; LCD_lf, so the temp ends up on the bottom
+                                    ; line and the status on the top line.
     rcall wire1_reset
     CA    wire1_write, skipROM
     CA    wire1_write, readScratchpad
@@ -669,11 +676,14 @@ ov_done:
 ;  LCD layout :
 ;
 ;       +------------------+
-;       | temp=23.50 C     |   <-- line 1, written by overflow0 ISR
-;       | set=25 win=0     |   <-- line 2, written here
+;       | Set:25C. Closed. |   <-- line 1 (top), written by lcd_refresh
+;       | Temp: 23.50 C    |   <-- line 2 (bottom), written by overflow0 ISR
 ;       +------------------+
 ;
-;  We do NOT redraw line 2 every loop iteration. We only redraw
+;  The two writers alternate : the ISR calls LCD_lf and ends up on
+;  line 2, then lcd_refresh calls LCD_lf and wraps back to line 1.
+;
+;  We do NOT redraw the status line every loop iteration. We only redraw
 ;  when lcd_dirty has been raised by some action (mode change,
 ;  target adjust, window toggle). This avoids the LCD flickering
 ;  and keeps the loop snappy.
@@ -692,7 +702,8 @@ lr_skip:
     ret
 
 show_normal:
-    rcall LCD_lf                 ; move cursor to line 2
+    rcall LCD_lf                 ; move cursor to the NEXT line (wraps to line 1
+                                 ; because the ISR most recently left us on line 2)
     ; NORMAL mode shows the target AND a human-readable window state.
     ; We branch on window_open so the user reads "Open" / "Closed"
     ; instead of a cryptic "win=0".
@@ -741,7 +752,7 @@ show_sleep:
 ;      consumes it, and acts on the button based on the mode.
 ;
 ;   4. The Timer0 ISR fires ~1x per second, reads temperature,
-;      prints it on LCD line 1, and decides whether to open or
+;      prints it on LCD line 2 (bottom), and decides whether to open or
 ;      close the window based on the target (skipped in SLEEP).
 ;
 ;   5. SRAM is the meeting point. ISRs and main loop never call

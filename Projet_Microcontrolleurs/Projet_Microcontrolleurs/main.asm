@@ -171,7 +171,16 @@ to_set:
 	ret
 to_sleep:
 	STI	mode_var, MODE_SLEEP
-	rjmp	close_window		; force fermeture en entrant en sleep (set aussi lcd_dirty)
+	rcall	close_window		; force fermeture en entrant en sleep
+
+	; ecran d'au revoir 2s, puis on eteint l'afficheur
+	rcall	LCD_home
+	PRINTF	LCD
+.db	"Sleeping...     ",LF,"                ",0
+	WAIT_MS	2000
+	CW	LCD_wr_ir, 0b00001000	; LCD display = OFF
+	STI	lcd_dirty, 0		; ne rien redessiner tant qu'on est en SLEEP
+	ret
 
 ; === reglage de la consigne (5..40 degC) ===
 target_up:
@@ -220,6 +229,16 @@ close_window:
 overflow0:
 	in	_sreg, SREG
 	push	w
+
+	; en SLEEP: l'afficheur est eteint, on n'a rien a faire
+	lds	w, mode_var
+	cpi	w, MODE_SLEEP
+	brne	ov_active
+	pop	w
+	out	SREG, _sreg
+	reti
+
+ov_active:
 	push	u
 	push	char			; r0 (PRINTF)
 	push	e0			; r4 (PRINTF)
