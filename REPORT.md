@@ -42,14 +42,21 @@ obligatoire et 3 supplémentaires, au-delà du minimum requis.
 consigne par défaut de 25 °C. La télécommande commande l'ensemble du
 système :
 
-| Touche      | Effet en NORMAL                   | Effet en SET            | Effet en SLEEP  |
-| ----------- | --------------------------------- | ----------------------- | --------------- |
-| SET         | Entre en mode SET                 | Retour en NORMAL        | —               |
-| CH +        | —                                 | Augmente la consigne    | —               |
-| CH −        | —                                 | Diminue la consigne     | —               |
-| VOL +       | Ouverture manuelle de la fenêtre  | —                       | —               |
-| VOL −       | Fermeture manuelle de la fenêtre  | —                       | —               |
-| POWER       | Entre en mode SLEEP               | —                       | Retour en NORMAL |
+| Touche      | Code RC5 | Effet en NORMAL                   | Effet en SET            | Effet en SLEEP  |
+| ----------- | -------- | --------------------------------- | ----------------------- | --------------- |
+| AV          | `0x38`   | Entre en mode SET                 | Retour en NORMAL        | —               |
+| CH +        | `0x20`   | —                                 | Augmente la consigne    | —               |
+| CH −        | `0x21`   | —                                 | Diminue la consigne     | —               |
+| VOL +       | `0x10`   | Ouverture manuelle de la fenêtre  | —                       | —               |
+| VOL −       | `0x11`   | Fermeture manuelle de la fenêtre  | —                       | —               |
+| POWER       | `0x0c`   | Entre en mode SLEEP               | Entre en mode SLEEP     | Retour en NORMAL |
+
+Les codes ont été relevés directement sur la télécommande à l'aide d'un
+mode de capture (affichage temporaire du dernier code reçu sur le LCD).
+La touche physique « SET » du Vivanco UR Z2 n'émet aucun signal RC5
+(c'est la touche de configuration interne de la télécommande
+universelle) : la fonction SET du programme a donc été affectée à la
+touche « AV », isolée des autres et peu sujette à confusion.
 
 La consigne est bornée entre 5 °C et 40 °C. Entrer en mode SLEEP force la
 fenêtre fermée.
@@ -81,8 +88,12 @@ Deux sources d'interruption sont utilisées :
   avant `reti` car les fronts intermédiaires du codage Manchester
   l'auraient mis à 1 pendant le décodage.
 - **Timer0 (overflow)** : déclenche la lecture périodique de la
-  température sur le DS18B20 (~750 ms, durée de conversion du capteur).
-  *(Partie développée par R, voir `wire1_temp2.asm`.)*
+  température sur le DS18B20 et le contrôle de la fenêtre. Configuré en
+  mode asynchrone (`ASSR ← (1<<AS0)`, source quartz 32 kHz externe),
+  prescaler 1, l'overflow survient environ une fois par seconde. L'ISR
+  (`overflow0`, dans `main.asm`) lit la température, affiche la valeur
+  sur la ligne 1 du LCD, lance la prochaine conversion et applique la
+  logique de régulation (ouverture / fermeture de la fenêtre).
 
 La boucle principale tourne quant à elle en *polling coopératif* : elle
 consulte les drapeaux `rc5_new` (posé par l'ISR INT7) et les valeurs de
@@ -159,6 +170,17 @@ notre paire MCU/télécommande : tous les codes des boutons utilisés se
 décodent correctement et de façon stable, sans nécessiter de calibration
 supplémentaire à l'oscilloscope.
 
+**Filtrage de l'auto-répétition.** Le protocole RC5 réémet la trame
+toutes les ~114 ms tant qu'une touche est maintenue, et une pression
+brève suffit en général à émettre 2 trames consécutives. Sans
+filtrage, chaque pression déclenche donc deux fois le dispatcher (la
+consigne s'incrémente de 2 au lieu de 1, par exemple). Le bit *toggle*
+de RC5 (bit 11 de la trame de 14 bits) bascule à chaque nouvelle
+pression mais reste identique pendant l'auto-répétition. Après les 14
+`ROL2` du décodeur, il se trouve en bit 3 de `b1` ; sa valeur est
+sauvegardée en SRAM (`rc5_last_tog`) puis comparée à chaque nouvelle
+trame. `rc5_new` n'est levé que si le toggle a changé.
+
 **Sauvegarde du contexte** : l'ISR sauvegarde SREG (dans `_sreg`/r1) et
 empile les registres qu'elle modifie (`w`, `u`, `b0`, `b1`, `b2`), puis
 les restaure avant `reti`.
@@ -176,13 +198,79 @@ formatée passe par `PRINTF LCD` (librairie `printf.asm`) qui appelle
 `LCD_putc` pour chaque caractère ; les valeurs (consigne, état fenêtre)
 sont lues depuis la SRAM (adresses 0x0260+) au moyen du formateur FDEC.
 
+**Partage de l'écran entre la boucle principale et l'ISR Timer0.**
+L'afficheur n'a qu'un seul curseur matériel : si la boucle principale
+et l'ISR écrivaient toutes deux n'importe où, leurs séquences
+`positionnement + caractères` s'entrecroiseraient et la position
+courante se retrouverait corrompue. L'écran a donc été partitionné :
+
+- **Ligne 1** (haut) appartient à `overflow0` : `LCD_home` puis
+  `PRINTF "temp=XX.YY C"`, environ une fois par seconde.
+- **Ligne 2** (bas) appartient à `lcd_refresh` : `LCD_lf` (déplacement
+  curseur en début de ligne 2, sans toucher la ligne 1) puis
+  `PRINTF` du contenu propre au mode.
+
+Comme la boucle principale tourne très vite (plusieurs milliers
+d'itérations par seconde) tandis que le rafraîchissement n'est
+nécessaire qu'aux changements d'état (~quelques fois par minute), un
+drapeau `lcd_dirty` (SRAM 0x0266) signale à `lcd_refresh` quand
+redessiner. Le drapeau est levé par chaque transition de mode, chaque
+ajustement de consigne, et chaque appel à `open_window` /
+`close_window` (qu'il provienne de la télécommande ou de l'ISR de
+régulation). Le reste du temps, `lcd_refresh` constate `lcd_dirty=0`
+et retourne immédiatement sans toucher au LCD. Cela évite que la
+boucle principale ne « martèle » l'écran en permanence et n'entre en
+collision avec l'écriture de la ligne 1 par l'ISR.
+
 Chaque routine d'affichage (`show_normal`, `show_set`, `show_sleep`)
-remplit toujours 16 caractères par ligne afin que l'image précédente soit
-intégralement écrasée à chaque rafraîchissement.
+remplit toujours 16 caractères pour la ligne 2 afin que l'image
+précédente soit intégralement écrasée.
 
 ### Capteur de température DS18B20 (1-wire)
 
-*(Section à compléter par R.)*
+Le DS18B20 est un capteur de température numérique sur bus 1-wire,
+connecté à la ligne DQ du module M5 (PORTB). Le bus est piloté en
+mode bit-bang par la librairie fournie `wire1.asm` (`wire1_init`,
+`wire1_reset`, `wire1_write`, `wire1_read`).
+
+**Cadence de lecture.** Timer0 fonctionne en mode asynchrone à partir
+du quartz externe 32 kHz (`ASSR = (1<<AS0)`, `TCCR0 = 1`,
+`TIMSK = (1<<TOIE0)`). L'overflow se produit toutes les
+~1 s, ce qui dépasse largement le temps de conversion du DS18B20
+(750 ms en résolution 12 bits).
+
+**Séquence dans `overflow0`.** À chaque overflow, l'ISR :
+
+1. lit le scratchpad : `wire1_reset`, commande `skipROM`,
+   commande `readScratchpad`, deux `wire1_read` successifs pour
+   récupérer LSB puis MSB de la température. Le résultat est placé
+   dans `a1:a0`, signed 16 bits au format DS18B20 (1/16 °C par LSB) ;
+2. l'affiche en ligne 1 du LCD via
+   `PRINTF "temp=…",FFRAC2+FSIGN,a,4,…,"C "` (le format `FFRAC2`
+   gère directement la division par 16 et l'affichage de 2 décimales) ;
+3. relance immédiatement la conversion suivante :
+   `wire1_reset`, `skipROM`, `convertT` ;
+4. compare `a1:a0` à la consigne (registre persistant `b3:b2`,
+   chargé à la valeur 25 °C × 16 = 0x0190 en `reset`) ; le résultat
+   `a − b` met à jour le flag N de SREG ;
+5. décide de l'action sur la fenêtre :
+    - `temp ≥ consigne` (N = 0) : ouvrir la fenêtre si elle est
+      fermée ;
+    - `temp < consigne` (N = 1) : fermer la fenêtre si elle est
+      ouverte ;
+    - en mode SLEEP, cette étape 4-5 est sautée intégralement et la
+      fenêtre reste à l'état où SLEEP l'a forcée (fermée).
+
+Le déclenchement est *edge-triggered* (action uniquement quand l'état
+de la fenêtre doit effectivement changer), ce qui évite d'envoyer
+inutilement une commande au servo à chaque overflow.
+
+**Sauvegarde du contexte.** L'ISR sauvegarde SREG dans `_sreg` (r1)
+et empile tous les registres modifiés par les appels qu'elle effectue
+(LCD, PRINTF, wire1) : `w, u, char, e0, e1, c0, a0..a3, b0, b1, X, Y,
+Z`. Les registres `b2`, `b3` (qui contiennent la consigne) sont
+volontairement *non* sauvegardés : ils sont initialisés une fois à
+`reset` et jamais modifiés par ailleurs.
 
 ### Servomoteur Futaba S3003
 
@@ -197,13 +285,15 @@ code utilisateur commence après la table de vecteurs.
 **Mémoire de données (SRAM interne)** : variables d'état placées dans la
 plage compatible avec `printf` (0x0260–0x02FF) :
 
-| Adresse | Symbole       | Taille | Contenu                              |
-| ------- | ------------- | ------ | ------------------------------------ |
-| 0x0260  | `mode_var`    | 1 o    | mode courant (0=NORMAL, 1=SET, 2=SLEEP) |
-| 0x0261  | `target_temp` | 1 o    | consigne en °C (5..40)               |
-| 0x0262  | `window_open` | 1 o    | état fenêtre (0=fermée, 1=ouverte)   |
-| 0x0263  | `rc5_cmd`     | 1 o    | dernier code RC5 décodé              |
-| 0x0264  | `rc5_new`     | 1 o    | drapeau « commande fraîche »         |
+| Adresse | Symbole         | Taille | Contenu                                            |
+| ------- | --------------- | ------ | -------------------------------------------------- |
+| 0x0260  | `mode_var`      | 1 o    | mode courant (0=NORMAL, 1=SET, 2=SLEEP)            |
+| 0x0261  | `target_temp`   | 1 o    | consigne en °C (5..40)                             |
+| 0x0262  | `window_open`   | 1 o    | état fenêtre (0=fermée, 1=ouverte)                 |
+| 0x0263  | `rc5_cmd`       | 1 o    | dernier code RC5 décodé                            |
+| 0x0264  | `rc5_new`       | 1 o    | drapeau « commande fraîche »                       |
+| 0x0265  | `rc5_last_tog`  | 1 o    | dernier bit toggle RC5 (filtre auto-répétition)    |
+| 0x0266  | `lcd_dirty`     | 1 o    | drapeau « ligne 2 LCD à redessiner »               |
 
 La pile est initialisée au sommet de la SRAM (`LDSP RAMEND`).
 
