@@ -70,6 +70,8 @@
 >
 > La boucle principale ne fait que **dispatcher selon le mode courant** et rafraîchir l'écran quand quelque chose a changé. Les ISR et la boucle principale **ne s'appellent jamais directement** — elles communiquent par des **variables partagées en SRAM**, ce qui garantit la responsivité du système.
 >
+> Le code est organisé en **modules par responsabilité** : `ir_rc5.asm` pour le décodage RC5, `thermo.asm` pour l'ISR Timer0 et la régulation, `servo.asm` pour la commande servo, `display.asm` pour le LCD, et `main.asm` qui ne contient plus que le squelette de la machine à états.
+>
 > Nous utilisons le **protocole 1-wire** pour le DS18B20, du **PWM logiciel basé sur Timer** pour le servo, et les **librairies du cours** pour le LCD et printf.
 >
 > Merci de votre attention."

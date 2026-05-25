@@ -164,5 +164,27 @@ Fix: push `a0` / `a1` before the PRINTF call and pop them back afterwards (after
 ### `main.asm` — line 2 cosmetics: dots after value and state
 `Set:25C Closed  ` → `Set:25C. Closed.` (and similarly `Set:25C. Open.  ` / `Set:25C. <EDIT>.`). Easier to parse visually. All still padded to exactly 16 chars so each frame fully overwrites the previous.
 
+### `main.asm` split into modules — `servo.asm`, `thermo.asm`, `display.asm`
+Carved up the single monolithic `main.asm` so each functional concern lives in its own file. **Zero behavior change** — purely a relocation of code blocks, byte-for-byte identical assembled output.
+
+**New file layout:**
+| File | Contains | Notes |
+|---|---|---|
+| `main.asm` | header, `.equ`s, vector table, `.include` block, `reset:`, `main:`, `dispatch`, `do_normal/set/sleep`, transitions, `target_up/down` | ~210 lines (down from ~400) |
+| `servo.asm` | `open_window`, `close_window` | R fills the PWM implementation here |
+| `thermo.asm` | `overflow0` (Timer0 ISR: DS18B20 read, line-2 PRINTF, threshold logic) | replaces the in-place stub in `main.asm` |
+| `display.asm` | `lcd_refresh`, `show_normal/set/sleep`, `do_splash` | LCD-side concerns |
+
+**Include order in `main.asm`:**
+1. Drivers fournis : `lcd.asm` → `printf.asm` → `wire1.asm`
+2. Modules applicatifs : `ir_rc5.asm` → `servo.asm` → `thermo.asm`
+3. Affichage : `display.asm`
+
+Drivers first because everything depends on them; `servo.asm` before `thermo.asm` because `overflow0` (in `thermo.asm`) calls `open_window`/`close_window` (forward refs would work too, but bottom-up reads cleaner); `display.asm` last because it's only referenced from `reset:` and `main:` of `main.asm`.
+
+**`.asmproj` updated** to list `servo.asm`, `thermo.asm`, `display.asm` so AS7 shows them in the Solution Explorer tree.
+
+**Rationale.** The original `main.asm` had grown past 400 lines covering ~6 distinct responsibilities; splitting along the natural seams gives V and R clean ownership boundaries (V owns `display.asm` + LCD details, R owns `servo.asm` + `thermo.asm`'s ISR body) and reduces the chance of merge conflicts when both push at the same time. Also makes the project layout match the *présentation des modules* table in the report — "one fichier per responsibility" reads better than "everything in main.asm".
+
 ### Known remaining issues
-- `open_window` / `close_window` still only flip the `window_open` SRAM byte. R has to wire up the servo PWM on PORTB.4 (M4) to make the window physically move.
+- `open_window` / `close_window` still only flip the `window_open` SRAM byte (now in `servo.asm`). R has to wire up the servo PWM on PORTB.4 (M4) to make the window physically move — following the `docs/TP10/TP10/servo1.asm` pattern (P1/P0 + `WAIT_US`).

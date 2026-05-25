@@ -98,7 +98,7 @@ Deux sources d'interruption sont utilisées :
   mode asynchrone (`ASSR ← (1<<AS0)`, source quartz 32 kHz externe),
   prescaler 128 (`TCCR0 = 5`), l'overflow survient environ une fois par
   seconde (32 768 / 128 / 256 ≈ 1 Hz). L'ISR
-  (`overflow0`, dans `main.asm`) lit la température, affiche la valeur
+  (`overflow0`, dans `thermo.asm`) lit la température, affiche la valeur
   sur la ligne 2 du LCD, lance la prochaine conversion, recharge la
   consigne courante depuis la SRAM et applique la logique de régulation
   (ouverture / fermeture de la fenêtre).
@@ -138,18 +138,27 @@ jour du DS18B20 (750 ms) absorbe largement les ~25 ms du décodage RC5.
 
 ### Présentation des modules
 
-| Fichier            | Rôle                                                 |
-| ------------------ | ---------------------------------------------------- |
-| `main.asm`         | reset, vecteurs d'interruption, boucle principale, machine à états, ISR Timer0 (`overflow0`), affichage LCD |
-| `ir_rc5.asm`       | ISR de décodage RC5 (INT7), inclus dans `main.asm`   |
-| `lcd.asm`          | pilote HD44780U *(fourni)*                           |
-| `printf.asm`       | impression formatée *(fourni)*                       |
-| `wire1.asm`        | pilote 1-wire bas niveau *(fourni)*                  |
-| `macros.asm`       | macros AVR générales *(fourni)*                      |
-| `definitions.asm`  | définitions de registres, ports, constantes *(fourni)* |
+| Fichier            | Rôle                                                                 |
+| ------------------ | -------------------------------------------------------------------- |
+| `main.asm`         | reset, vecteurs d'interruption, boucle principale, machine à états (`dispatch`, `do_normal/set/sleep`, transitions, `target_up/down`) |
+| `ir_rc5.asm`       | ISR de décodage RC5 (INT7), filtre auto-répétition par bit toggle    |
+| `thermo.asm`       | ISR Timer0 (`overflow0`) : lecture DS18B20, affichage ligne 2, seuil → fenêtre |
+| `servo.asm`        | `open_window` / `close_window` — commande PWM du servo               |
+| `display.asm`      | `lcd_refresh`, `show_normal/set/sleep`, `do_splash` (écran d'accueil)|
+| `lcd.asm`          | pilote HD44780U *(fourni)*                                           |
+| `printf.asm`       | impression formatée *(fourni)*                                       |
+| `wire1.asm`        | pilote 1-wire bas niveau *(fourni)*                                  |
+| `macros.asm`       | macros AVR générales *(fourni)*                                      |
+| `definitions.asm`  | définitions de registres, ports, constantes *(fourni)*               |
 
-Le point d'entrée du build Atmel Studio est `main.asm` ; les autres
-fichiers du projet sont intégrés via `.include`. Le fichier
+Le point d'entrée du build Atmel Studio est `main.asm` ; il configure
+les vecteurs d'interruption à `INT7addr` et `OVF0addr` puis intègre les
+autres fichiers via `.include` dans l'ordre suivant : pilotes du cours
+(`lcd.asm`, `printf.asm`, `wire1.asm`), modules applicatifs (`ir_rc5.asm`,
+`servo.asm`, `thermo.asm`), puis `display.asm`. Cette séparation par
+*module fonctionnel* — un fichier par périphérique ou par responsabilité
+logique — facilite la lecture et permet à chacun des deux membres du
+groupe de travailler sur son fichier sans conflits de version. Le fichier
 `wire1_temp2.asm` (présent dans le dossier projet) est un programme de
 test autonome conservé comme référence pendant le développement ; il
 ne fait pas partie de l'application finale.
@@ -319,7 +328,7 @@ Deux positions sont utilisées dans le projet :
 - **Fenêtre ouverte** : largeur d'impulsion proche de 2 ms,
   butée droite.
 
-Les sous-routines `open_window` et `close_window` (dans `main.asm`)
+Les sous-routines `open_window` et `close_window` (dans `servo.asm`)
 constituent le point d'entrée unique de la commande servo : elles sont
 appelées soit par la boucle principale en réponse à un appui sur
 `VOL+`/`VOL-` de la télécommande (commande manuelle), soit par l'ISR
