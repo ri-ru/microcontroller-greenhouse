@@ -49,6 +49,13 @@
 .org	OVF0addr
 	rjmp	overflow0		; Timer0 overflow -> lecture temperature (R)
 
+; --- librairies (incluses ici pour que PRINTF/LCD_* soient definis
+;     avant reset, qui les utilise pour l'ecran d'accueil) ---
+.include "lcd.asm"
+.include "printf.asm"
+.include "wire1.asm"
+.include "ir_rc5.asm"
+
 reset:
 	LDSP	RAMEND
 	in	w, MCUCR			; enable external SRAM (LCD)
@@ -96,11 +103,6 @@ reset:
 	CA	wire1_write, convertT
 
 	rjmp	main
-
-.include "lcd.asm"
-.include "printf.asm"
-.include "wire1.asm"
-.include "ir_rc5.asm"
 
 ; ==============================================================
 ;  main loop : dispatch sur le mode -> rafraichir LCD
