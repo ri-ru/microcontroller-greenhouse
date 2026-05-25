@@ -55,6 +55,7 @@
 .include "printf.asm"
 .include "wire1.asm"
 .include "ir_rc5.asm"
+.include "servo.asm"
 
 reset:
 	LDSP	RAMEND
@@ -205,18 +206,6 @@ target_down:
 	sts	target_temp, w
 	STI	lcd_dirty, 1
 td_end:
-	ret
-
-; === window control - stubs pour R ===
-; TODO R: bouger le servo en position ouverte (M4, PORTB pin SERVO1)
-open_window:
-	STI	window_open, 1
-	STI	lcd_dirty, 1
-	ret
-; TODO R: bouger le servo en position fermee
-close_window:
-	STI	window_open, 0
-	STI	lcd_dirty, 1
 	ret
 
 ; ==============================================================

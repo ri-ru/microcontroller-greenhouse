@@ -38,10 +38,15 @@ obligatoire et 3 supplémentaires, au-delà du minimum requis.
 
 ### Mode d'emploi
 
-À la mise sous tension, le LCD affiche pendant 3 s un message
+À la mise sous tension, le LCD affiche pendant 2 s un message
 d'accueil (`Hello gardener!`), puis le système entre en mode
-**NORMAL** avec une consigne par défaut de 25 °C. La télécommande
-commande l'ensemble du système :
+**NORMAL** avec une consigne par défaut de 25 °C. Lors d'un appui
+sur **POWER**, un message « Sleeping... » est affiché pendant 2 s
+puis l'écran est entièrement effacé : la régulation est suspendue
+et l'ISR Timer0 ignore les overflows tant qu'on reste en SLEEP. Un
+nouvel appui sur POWER rejoue le même message d'accueil avant de
+reprendre le mode NORMAL. La télécommande commande l'ensemble du
+système :
 
 | Touche      | Code RC5 | Effet en NORMAL                   | Effet en SET            | Effet en SLEEP  |
 | ----------- | -------- | --------------------------------- | ----------------------- | --------------- |
@@ -94,7 +99,7 @@ Deux sources d'interruption sont utilisées :
   prescaler 128 (`TCCR0 = 5`), l'overflow survient environ une fois par
   seconde (32 768 / 128 / 256 ≈ 1 Hz). L'ISR
   (`overflow0`, dans `main.asm`) lit la température, affiche la valeur
-  sur la ligne 1 du LCD, lance la prochaine conversion, recharge la
+  sur la ligne 2 du LCD, lance la prochaine conversion, recharge la
   consigne courante depuis la SRAM et applique la logique de régulation
   (ouverture / fermeture de la fenêtre).
 
@@ -213,12 +218,16 @@ et l'ISR écrivaient toutes deux n'importe où, leurs séquences
 `positionnement + caractères` s'entrecroiseraient et la position
 courante se retrouverait corrompue. L'écran a donc été partitionné :
 
-- **Ligne 1** (haut) appartient à `overflow0` : `LCD_home` puis
-  `PRINTF "Temp: XX.XX C"`, environ une fois par seconde.
-- **Ligne 2** (bas) appartient à `lcd_refresh` : `LCD_lf` (déplacement
-  curseur en début de ligne 2, sans toucher la ligne 1) puis
+- **Ligne 1** (haut) appartient à `lcd_refresh` : `LCD_home` puis
   `PRINTF` du contenu propre au mode (`Set:25C. Closed.` en NORMAL,
   `Set:25C. <EDIT>.` en SET, `Sleeping...` en SLEEP).
+- **Ligne 2** (bas) appartient à `overflow0` : `LCD_lf` (déplacement
+  curseur en début de ligne 2, sans toucher la ligne 1) puis
+  `PRINTF "Temp: XX.XX C"`, environ une fois par seconde.
+
+Le positionnement est donc déterministe : les deux écrivains
+utilisent des points d'entrée différents (`LCD_home` vs `LCD_lf`)
+et ne se disputent pas la position du curseur.
 
 Comme la boucle principale tourne très vite (plusieurs milliers
 d'itérations par seconde) tandis que le rafraîchissement n'est
@@ -230,10 +239,10 @@ ajustement de consigne, et chaque appel à `open_window` /
 régulation). Le reste du temps, `lcd_refresh` constate `lcd_dirty=0`
 et retourne immédiatement sans toucher au LCD. Cela évite que la
 boucle principale ne « martèle » l'écran en permanence et n'entre en
-collision avec l'écriture de la ligne 1 par l'ISR.
+collision avec l'écriture de la ligne 2 par l'ISR.
 
 Chaque routine d'affichage (`show_normal`, `show_set`, `show_sleep`)
-remplit toujours 16 caractères pour la ligne 2 afin que l'image
+remplit toujours 16 caractères pour la ligne 1 afin que l'image
 précédente soit intégralement écrasée.
 
 ### Capteur de température DS18B20 (1-wire)
@@ -249,13 +258,18 @@ au prescaler 128, `TIMSK = (1<<TOIE0)`). L'overflow se produit à
 32 768 / 128 / 256 ≈ 1 Hz, ce qui dépasse largement le temps de
 conversion du DS18B20 (750 ms en résolution 12 bits).
 
-**Séquence dans `overflow0`.** À chaque overflow, l'ISR :
+**Séquence dans `overflow0`.** À chaque overflow, l'ISR commence
+par tester `mode_var` : si l'application est en SLEEP, l'ISR
+restaure immédiatement SREG/`w` et fait `reti` sans même empiler
+les autres registres ni interroger le capteur. L'écran reste vide
+et le bus 1-wire n'est pas sollicité. En dehors du mode SLEEP, la
+séquence complète est :
 
 1. lit le scratchpad : `wire1_reset`, commande `skipROM`,
    commande `readScratchpad`, deux `wire1_read` successifs pour
    récupérer LSB puis MSB de la température. Le résultat est placé
    dans `a1:a0`, signed 16 bits au format DS18B20 (1/16 °C par LSB) ;
-2. l'affiche en ligne 1 du LCD via
+2. l'affiche en ligne 2 (bas) du LCD via
    `PRINTF "Temp: ",FFRAC2+FSIGN,a,4,$22," C "` (le format `FFRAC2`
    avec le point décimal à la position 4 prend directement en compte
    les 4 bits fractionnaires du DS18B20 ; `$22` demande 2 chiffres
@@ -312,7 +326,7 @@ appelées soit par la boucle principale en réponse à un appui sur
 Timer0 en fonction du résultat de la comparaison `temp` vs `consigne`
 (régulation automatique). Les deux mettent également à jour la
 variable d'état `window_open` en SRAM et lèvent `lcd_dirty` pour
-déclencher le rafraîchissement de la ligne 2 du LCD.
+déclencher le rafraîchissement de la ligne d'état (ligne 1) du LCD.
 
 *(Implémentation détaillée du PWM logiciel — choix du timer auxiliaire,
 des constantes de largeur d'impulsion par butée mécanique — à
@@ -335,7 +349,7 @@ plage compatible avec `printf` (0x0260–0x02FF) :
 | 0x0263  | `rc5_cmd`       | 1 o    | dernier code RC5 décodé                            |
 | 0x0264  | `rc5_new`       | 1 o    | drapeau « commande fraîche »                       |
 | 0x0265  | `rc5_last_tog`  | 1 o    | dernier bit toggle RC5 (filtre auto-répétition)    |
-| 0x0266  | `lcd_dirty`     | 1 o    | drapeau « ligne 2 LCD à redessiner »               |
+| 0x0266  | `lcd_dirty`     | 1 o    | drapeau « ligne d'état LCD à redessiner »          |
 
 La pile est initialisée au sommet de la SRAM (`LDSP RAMEND`).
 

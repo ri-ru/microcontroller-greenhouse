@@ -239,16 +239,16 @@ reset:
     rcall wire1_init       ; init the 1-wire bus (DS18B20 sensor)
     rcall LCD_init         ; init the LCD controller
 
-    ; --- welcome screen (3 seconds before normal display kicks in) ---
-    rcall LCD_home
-    PRINTF LCD
-.db "Hello gardener!",0
-    WAIT_MS 3000           ; busy-wait for 3000 ms (a TP macro)
-    rcall LCD_clear        ; wipe the screen so it's clean for the real display
-    ; Note : this WAIT_MS happens BEFORE we enable interrupts (sei
-    ; is further down). That's deliberate -- it means the welcome
-    ; screen stays put for the full 3 seconds, undisturbed by
-    ; Timer0 overflows or IR button presses.
+    ; --- welcome screen (2 seconds before normal display kicks in) ---
+    rcall do_splash        ; defined at the bottom of the file
+    ; do_splash prints "Hello gardener!" on the LCD, waits 2 s,
+    ; then clears the screen. It's a subroutine because the same
+    ; splash is shown again when waking up from SLEEP -- DRY.
+    ;
+    ; Note : this rcall happens BEFORE we enable interrupts (sei
+    ; is further down). That's deliberate -- the splash stays put
+    ; for the full 2 seconds, undisturbed by Timer0 overflows or
+    ; IR button presses.
 
     ; --- initial state ---
     STI   mode_var,    MODE_NORMAL
@@ -419,8 +419,18 @@ dz_end:
 ; --------------------------------------------------------------
 
 to_normal:
+    lds   w, mode_var               ; w = OLD mode (before we overwrite it)
     STI   mode_var, MODE_NORMAL
     STI   lcd_dirty, 1
+    cpi   w, MODE_SLEEP
+    brne  tn_done                   ; came from SET -> just return
+    ; Came from SLEEP -> replay the splash to confirm "I'm awake".
+    ; We disable Timer0's interrupt during the splash so the ISR
+    ; doesn't try to write the temperature on top of "Hello gardener!".
+    OUTI  TIMSK, 0                  ; suspend Timer0 overflow IRQ
+    rcall do_splash
+    OUTI  TIMSK, (1<<TOIE0)         ; re-enable Timer0 overflow IRQ
+tn_done:
     ret
 
 to_set:
@@ -430,10 +440,23 @@ to_set:
 
 to_sleep:
     STI   mode_var, MODE_SLEEP
-    rjmp  close_window
-    ; Note : we fall through into close_window via rjmp, which
-    ; itself sets lcd_dirty and rets. So we get "close the window
-    ; AND mark LCD dirty AND return" in one step.
+    rcall close_window              ; force the window shut as we go to sleep
+
+    ; "Goodbye" screen : show "Sleeping..." on line 1 + a blank line 2
+    ; for 2 seconds, then clear the LCD. The LF inside the format string
+    ; sends the cursor to the next line so the spaces overwrite whatever
+    ; was on line 2 (e.g. the last "Temp: ..." printed by the ISR).
+    rcall LCD_home
+    PRINTF LCD
+.db "Sleeping...     ",LF,"                ",0
+    WAIT_MS 2000
+    rcall LCD_clear                 ; LCD stays powered but visually blank
+    STI   lcd_dirty, 0              ; ensure lcd_refresh doesn't redraw show_sleep
+                                    ; on top of the blank screen
+    ret
+    ; While we're in SLEEP, the Timer0 ISR also early-returns
+    ; (see overflow0 below), so absolutely nothing is drawn until
+    ; the user presses POWER and to_normal kicks back in.
 
 
 ; --------------------------------------------------------------
@@ -540,6 +563,20 @@ close_window:
 overflow0:
     in    _sreg, SREG          ; save the status register first
     push  w
+
+    ; --- fast path : if we're in SLEEP, do absolutely nothing ---
+    ; The LCD has been cleared by to_sleep and we don't want to
+    ; redraw anything until the user wakes us. We push only w
+    ; (so we have a scratch register for the check), bail out,
+    ; and skip the heavy push block + sensor read entirely.
+    lds   w, mode_var
+    cpi   w, MODE_SLEEP
+    brne  ov_active
+    pop   w
+    out   SREG, _sreg
+    reti
+
+ov_active:
     push  u
     push  char                 ; r0  (used by PRINTF)
     push  e0                   ; r4  (used by PRINTF)
@@ -561,14 +598,9 @@ overflow0:
     push  zh
 
     ; --- read temperature from DS18B20, display on LCD line 2 (bottom) ---
-    rcall LCD_lf                    ; move LCD cursor to the NEXT line.
-                                    ; LCD_lf wraps : if we were on line 1, we
-                                    ; go to line 2 ; if we were already on line 2,
-                                    ; we wrap back to line 1. In practice the
-                                    ; cursor alternates between the two lines as
-                                    ; the ISR and lcd_refresh take turns calling
-                                    ; LCD_lf, so the temp ends up on the bottom
-                                    ; line and the status on the top line.
+    rcall LCD_lf                    ; move LCD cursor to the next line.
+                                    ; Pair this with show_*'s LCD_home (line 1)
+                                    ; and the temp lands cleanly on line 2.
     rcall wire1_reset
     CA    wire1_write, skipROM
     CA    wire1_write, readScratchpad
@@ -680,8 +712,9 @@ ov_done:
 ;       | Temp: 23.50 C    |   <-- line 2 (bottom), written by overflow0 ISR
 ;       +------------------+
 ;
-;  The two writers alternate : the ISR calls LCD_lf and ends up on
-;  line 2, then lcd_refresh calls LCD_lf and wraps back to line 1.
+;  Cursor positioning is deterministic : show_* calls LCD_home to
+;  reset the cursor to line 1, the ISR calls LCD_lf to step down
+;  to line 2. The two writers don't fight for cursor position.
 ;
 ;  We do NOT redraw the status line every loop iteration. We only redraw
 ;  when lcd_dirty has been raised by some action (mode change,
@@ -702,8 +735,7 @@ lr_skip:
     ret
 
 show_normal:
-    rcall LCD_lf                 ; move cursor to the NEXT line (wraps to line 1
-                                 ; because the ISR most recently left us on line 2)
+    rcall LCD_home               ; cursor to line 1 col 1
     ; NORMAL mode shows the target AND a human-readable window state.
     ; We branch on window_open so the user reads "Open" / "Closed"
     ; instead of a cryptic "win=0".
@@ -722,7 +754,7 @@ show_normal_open:
     ret
 
 show_set:
-    rcall LCD_lf
+    rcall LCD_home
     PRINTF LCD
 .db "Set:",FDEC|FDIG2,low(target_temp),"C. <EDIT>.",0
     ; the "<EDIT>" tag tells the user that CH+/CH- now adjust
@@ -730,9 +762,29 @@ show_set:
     ret
 
 show_sleep:
-    rcall LCD_lf
+    rcall LCD_home
     PRINTF LCD
 .db "Sleeping...     ",0
+    ; In practice this is rarely called : to_sleep clears
+    ; lcd_dirty before returning, so lcd_refresh skips the redraw.
+    ; It only fires if someone raises lcd_dirty while in SLEEP.
+    ret
+
+
+; --------------------------------------------------------------
+;  do_splash : shared welcome screen (boot AND wake-from-SLEEP)
+; --------------------------------------------------------------
+;
+;  Factored out so both reset and to_normal can call it without
+;  duplicating the strings. The LF in the format puts spaces on
+;  line 2 so the splash overwrites any stale text.
+
+do_splash:
+    rcall LCD_home
+    PRINTF LCD
+.db "Hello gardener!",LF,"                ",0
+    WAIT_MS 2000                 ; busy-wait for 2 s
+    rcall LCD_clear              ; wipe everything before the real display takes over
     ret
 
 

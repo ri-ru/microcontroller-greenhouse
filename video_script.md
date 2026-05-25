@@ -19,9 +19,9 @@
 
 ## [0:20 – 1:10] Démo mode NORMAL
 
-*(allumer la carte — attendre l'écran d'accueil "Hello gardener!" pendant 3 s)*
+*(allumer la carte — attendre l'écran d'accueil "Hello gardener!" pendant 2 s)*
 
-> "À l'allumage, un écran d'accueil s'affiche pendant 3 secondes, puis on passe en **mode NORMAL**. La première ligne du LCD montre l'état courant — `Set:25C. Closed.` — et la deuxième ligne se rafraîchit chaque seconde avec la température mesurée, ici `Temp: 23.50 C`."
+> "À l'allumage, un écran d'accueil s'affiche pendant 2 secondes, puis on passe en **mode NORMAL**. La première ligne du LCD montre l'état courant — `Set:25C. Closed.` — et la deuxième ligne se rafraîchit chaque seconde avec la température mesurée, ici `Temp: 23.50 C`."
 
 *(réchauffer le capteur avec un doigt)*
 
@@ -53,7 +53,11 @@
 
 *(appuyer sur POWER)*
 
-> "**POWER** met le système en **mode SLEEP**. La fenêtre est forcée fermée, l'écran affiche `Sleeping…` pendant 2 secondes, puis le LCD s'éteint complètement pour économiser de l'énergie. L'ISR Timer0 devient un no-op : on ne lit même plus le capteur. Un nouvel appui sur POWER réveille le système, ré-allume l'écran et revient en mode NORMAL."
+> "**POWER** met le système en **mode SLEEP**. La fenêtre est forcée fermée, l'écran affiche `Sleeping…` pendant 2 secondes, puis le LCD est effacé : l'écran reste allumé mais entièrement vide. L'ISR Timer0 devient un no-op : on ne lit même plus le capteur, plus aucun affichage ne se met à jour."
+
+*(appuyer à nouveau sur POWER)*
+
+> "Un nouvel appui sur POWER rejoue l'écran d'accueil `Hello gardener!` pendant 2 secondes, puis le système revient en mode NORMAL et la régulation reprend immédiatement."
 
 ---
 

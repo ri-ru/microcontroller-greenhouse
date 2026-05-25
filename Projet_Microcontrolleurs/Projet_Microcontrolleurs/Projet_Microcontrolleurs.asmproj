@@ -96,6 +96,9 @@
     <Compile Include="printf1.asm">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="servo.asm">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="wire1.asm">
       <SubType>Code</SubType>
     </Compile>
