@@ -3,9 +3,6 @@
 ; module: M5, input port: PORTB
 .include "macros.asm"		; include macro definitions
 .include "definitions.asm"	; include register/constant definitions
-.include "lcd.asm"			; include LCD driver routines
-.include "printf.asm"		; include formatted printing routines
-.include "wire1.asm"		; include Dallas 1-wire(R) routines
 
 ; === interrupt vector table ===
 .org	0
@@ -13,7 +10,14 @@
 .org	OVF0addr ; timer overflow 0 interrupt vector
 	rjmp	overflow0
 
-; === interrupt service routines === TODO : initialize a _w for interruptions and change alloccurences of w
+
+
+
+; === interrupt service routines === 
+.org	0x30
+.include "lcd.asm"			; include LCD driver routines
+.include "printf.asm"		; include formatted printing routines
+.include "wire1.asm"		; include Dallas 1-wire(R) routines
 overflow0:
 	rcall	lcd_home			; place cursor to home position
 	rcall	wire1_reset			; send a reset pulse
@@ -41,6 +45,9 @@ overflow0:
 	brbs 2, 1 ; branch if N is set <=> Temp < limit
 	rcall open_window
 	reti
+
+
+
 ; === initialization (reset) ===
 reset:		
 	LDSP	RAMEND			; load stack pointer (SP)
@@ -50,11 +57,11 @@ reset:
 	;TODO : prescaler pour que overflow0 soit appelé toutes les 750ms (ou moins en changeant le registre configuration pour réduire la précision de mesure de T)
 	OUTI	TIMSK,1<<TOIE0	; Timer0 Overflow Interrupt Enable
 	sei				; set global interrupt
+	ldi b2, 0b10010000
+	ldi b3, 0b00000001 ; load 25 C as limit temperature
 	rcall	wire1_reset			; send a reset pulse
 	CA	wire1_write, skipROM	; skip ROM identification
 	CA	wire1_write, convertT	; initiate temp conversion
-	ldi b2, 0b10010000
-	ldi b3, 0b00000001 ; load 25 C as limit temperature
 
 
 
