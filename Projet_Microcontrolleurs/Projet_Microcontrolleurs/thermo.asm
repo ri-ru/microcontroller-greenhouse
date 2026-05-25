@@ -1,57 +1,45 @@
 ; file	thermo.asm   target ATmega128L-4MHz-STK300
-; purpose ISR Timer0 (~1Hz): lecture DS18B20, affichage temperature sur
-;         ligne 2 du LCD, mise a jour de l'historique min/max, et
+; purpose Timer0 ~1Hz: l'ISR ne fait que lever le flag convertT_ended.
+;         readT (appelee depuis main) fait le vrai travail: lecture
+;         DS18B20, affichage ligne 2 du LCD, historique min/max,
 ;         controle de la fenetre par seuil.
 ;         (vecteur OVF0addr installe dans main.asm)
+;
+;  On separe l'ISR du travail lourd parce que open_window/close_window
+;  bloquent ~260 ms pour faire le PWM du servo. Tant que c'etait dans
+;  l'ISR, INT7 (RC5) ne pouvait pas etre servi pendant ce temps.
 
 ; ==============================================================
-;  overflow0 : ISR Timer0 (lecture temperature DS18B20)
-; --------------------------------------------------------------
-;  - SLEEP : early-exit, on ne fait rien.
-;  - HISTORY : on lit le capteur et on met a jour l'historique,
-;    mais on ne dessine pas sur le LCD et on ne regule pas.
-;  - NORMAL / SET : lecture + affichage ligne 2 + update historique
-;    + comparaison a la consigne + ouverture/fermeture fenetre.
+;  overflow0 : ISR Timer0 -- juste lever le flag, tres court.
 ; ==============================================================
 overflow0:
 	in	_sreg, SREG
 	push	w
-
-	; en SLEEP: l'afficheur est vide, on n'a rien a faire
-	lds	w, mode_var
-	cpi	w, MODE_SLEEP
-	brne	ov_active
+	STI	convertT_ended, 1
 	pop	w
 	out	SREG, _sreg
 	reti
 
-ov_active:
-	push	u
-	push	char			; r0 (PRINTF)
-	push	e0			; r4 (PRINTF)
-	push	e1			; r5 (PRINTF)
-	push	c0			; r8 (swap LSB)
-	push	a0
-	push	a1
-	push	a2
-	push	a3
-	push	b0
-	push	b1
-	push	b2
-	push	b3
-	push	xl
-	push	xh
-	push	yl
-	push	yh
-	push	zl
-	push	zh
+; ==============================================================
+;  readT : appelee depuis main quand convertT_ended = 1.
+;  - SLEEP   : ne rien faire (afficheur vide).
+;  - HISTORY : lire + maj historique, sans dessiner ligne 2 ni servo.
+;  - NORMAL/SET : lecture + affichage ligne 2 + history_update
+;                 + comparaison a la consigne + open/close fenetre.
+; ==============================================================
+readT:
+	STI	convertT_ended, 0		; consommer le flag
+
+	; en SLEEP: l'afficheur est vide, on n'a rien a faire
+	lds	w, mode_var
+	cpi	w, MODE_SLEEP
+	breq	rt_done
 
 	; --- positionner le curseur sur ligne 2 (sauf en HISTORY) ---
-	lds	w, mode_var
 	cpi	w, MODE_HISTORY
-	breq	ov_skip_lcdlf
+	breq	rt_skip_lcdlf
 	rcall	LCD_lf				; ligne 2 (bas)
-ov_skip_lcdlf:
+rt_skip_lcdlf:
 
 	; --- lecture temperature DS18B20 ---
 	rcall	wire1_reset
@@ -70,10 +58,10 @@ ov_skip_lcdlf:
 	push	a1
 	lds	w, mode_var
 	cpi	w, MODE_HISTORY
-	breq	ov_skip_printf
+	breq	rt_skip_printf
 	PRINTF	LCD
 .db	"Temp: ",FFRAC2+FSIGN,a,4,$22," C  ",CR,0
-ov_skip_printf:
+rt_skip_printf:
 	rcall	wire1_reset			; lance la prochaine conversion
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
@@ -86,7 +74,7 @@ ov_skip_printf:
 	; --- en HISTORY: pas de regulation thermique ---
 	lds	w, mode_var
 	cpi	w, MODE_HISTORY
-	breq	ov_done
+	breq	rt_done
 
 	; --- comparaison a la consigne ---
 	; recharger la consigne: b3:b2 = target_temp * 16 (format DS18B20)
@@ -107,41 +95,20 @@ ov_skip_printf:
 	mov	b1, a1
 	sub	b0, b2
 	sbc	b1, b3				; b1:b0 = temp - consigne (signe)
-	brmi	ov_close			; N=1 -> temp < consigne
+	brmi	rt_close			; N=1 -> temp < consigne
 
 	; temp >= consigne : ouvrir si pas deja
 	lds	w, window_open
 	tst	w
-	brne	ov_done
+	brne	rt_done
 	rcall	open_window
-	rjmp	ov_done
+	rjmp	rt_done
 
-ov_close:
+rt_close:
 	lds	w, window_open
 	tst	w
-	breq	ov_done
+	breq	rt_done
 	rcall	close_window
 
-ov_done:
-	pop	zh
-	pop	zl
-	pop	yh
-	pop	yl
-	pop	xh
-	pop	xl
-	pop	b3
-	pop	b2
-	pop	b1
-	pop	b0
-	pop	a3
-	pop	a2
-	pop	a1
-	pop	a0
-	pop	c0
-	pop	e1
-	pop	e0
-	pop	char
-	pop	u
-	pop	w
-	out	SREG, _sreg
-	reti
+rt_done:
+	ret

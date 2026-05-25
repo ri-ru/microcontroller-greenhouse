@@ -23,6 +23,7 @@
 .equ	lcd_dirty	= 0x0266	; flag: 1 = ligne 2 LCD doit etre redessinee
 .equ	min_temp	= 0x0267	; mirror SRAM du min EEPROM (16-bit signe)
 .equ	max_temp	= 0x0269	; mirror SRAM du max EEPROM (16-bit signe)
+.equ	convertT_ended	= 0x026b	; flag: Timer0 leve, main loop appelle readT
 
 ; === RC5 button codes (Vivanco UR Z2, releves le 2026-05-25) ===
 ; bouton    code   usage
@@ -74,6 +75,9 @@ reset:
 	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
 	cbi	PORTE, IR			; pas de pull-up interne
 
+	sbi	DDRC,  SERVO1			; PC4 en sortie (servo Futaba)
+	cbi	PORTC, SERVO1			; idle bas
+
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
 	rcall	history_init			; charger min/max EEPROM -> SRAM (ou init 1er boot)
@@ -89,6 +93,7 @@ reset:
 	STI	rc5_new,     0
 	STI	rc5_last_tog, 0xff		; valeur impossible -> 1ere pression valide
 	STI	lcd_dirty,   1			; forcer 1er affichage
+	STI	convertT_ended, 0		; pas de readT a faire au demarrage
 
 	; INT7: front descendant sur PE7
 	OUTEI	EICRB, (1<<ISC71)
@@ -116,6 +121,12 @@ reset:
 ; ==============================================================
 main:
 	rcall	dispatch
+	; readT hors ISR : sinon servo PWM (~260ms) masque INT7 (RC5)
+	lds	w, convertT_ended
+	tst	w
+	breq	m_no_temp
+	rcall	readT
+m_no_temp:
 	rcall	lcd_refresh
 	rjmp	main
 
