@@ -47,6 +47,7 @@ reset:
 	STI	mode_var,    MODE_NORMAL
 	STI	target_temp, 25
 	STI	window_open, 0
+	STI	rc5_cmd,     0
 	STI	rc5_new,     0
 
 	; INT7: front descendant sur PE7
@@ -164,8 +165,8 @@ lcd_refresh:
 
 show_normal:
 	rcall	LCD_home
-	PRINTF	LCD
-.db	"NORMAL          ",LF,"set=",FDEC,low(target_temp)," win=",FDEC,low(window_open),"   ",0
+	PRINTF	LCD				; DEBUG: 'last=XX' = dernier code RC5 recu (a retirer apres capture)
+.db	"NORMAL  last=",FHEX,low(rc5_cmd)," ",LF,"set=",FDEC|FDIG2,low(target_temp)," win=",FDEC,low(window_open),"    ",0
 	ret
 
 show_set:

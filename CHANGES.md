@@ -58,5 +58,10 @@ Was a standalone test program with its own `reset:`/`main:` printing `cmd=XX` on
 ### Why interrupt-driven RC5 (architecture note)
 Forum (22.05) accepts polling or interrupts with justification. For the IR decoder, INT7 is clearly the right pick: without it, the main loop would have to busy-wait on PE7 continuously, blocking the LCD refresh and the temp-reading cadence. With INT7, the ~25 ms decode runs only when a button is pressed, which is rare relative to the 750 ms DS18B20 conversion cycle, so it doesn't disturb anything. The main loop itself stays cooperative polling (consuming `rc5_new` flag) — clean separation between event capture (ISR) and event dispatch (main).
 
+### `main.asm` — debug: show last RC5 code on LCD (NORMAL mode)
+Line 1 of NORMAL mode now reads `NORMAL  last=XX` where `XX` is the last decoded RC5 byte in hex. Use this to capture the actual codes for SET / CH± / VOL± / POWER on the Vivanco UR Z2: press each button, write down the value shown, replace the `KEY_*` `.equ`s at the top of `main.asm`, then **remove the `last=` field** for the final demo (it's a debug aid, not production UI).
+
+`rc5_cmd` is now initialised to 0 in reset so the field reads `00` before any button is pressed instead of garbage.
+
 ### `REPORT.md` — new
 Markdown draft of the technical report, mirroring the LaTeX section structure (Description générale / Manuel d'utilisation / Rapport technique) so V can copy-paste into `MCU2026-GXXX.tex`. Sections filled in for the work done so far (V's parts: IR/RC5, LCD, state machine). R's parts (servo, DS18B20) have `*(à compléter par R)*` placeholders.
