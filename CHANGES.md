@@ -38,3 +38,25 @@ Rewrote from the LCD "HI !" smoke test into the greenhouse state machine.
 - Atmel Studio entry point unchanged: `Projet_Microcontrolleurs.asmproj` → `main.asm`.
 - `main.asm` includes only `macros.asm`, `definitions.asm`, `lcd.asm`, `printf.asm`. Does **not** include `wire1*.asm` yet (R's `wire1_temp2.asm` still has its own `reset:` — integration TBD).
 - Not yet test-assembled in Atmel Studio.
+
+### `ir_rc5.asm` — refactored from standalone program to ISR (V)
+Was a standalone test program with its own `reset:`/`main:` printing `cmd=XX` on the LCD. Now provides just `rc5_isr`, included by `main.asm`.
+
+- Triggered by **INT7 on PE7 falling edge** (the IR receiver idles high; start of an RC5 frame = falling edge).
+- Reuses the existing Manchester decode (CLR2 / ROL2 / P2C, T1=1870 µs sampling at 1/4 period then every T1).
+- Removes `WP1 PINE,IR` (no longer needed: the first edge already triggered the interrupt).
+- Writes the decoded byte to `rc5_cmd`, sets `rc5_new = 1`.
+- Explicitly clears `INTF7` before `reti` because mid-bit Manchester transitions arm it during the decode.
+- Saves/restores SREG (via `_sreg`/r1) + `w`, `u`, `b0..b2`.
+
+### `main.asm` — INT7 setup, `poll_rc5` removed
+- Added `.org INT7addr` → `rjmp rc5_isr`.
+- In `reset`: PE7 as input no-pull-up, `EICRB ← (1<<ISC71)` (falling edge), `EIFR ← (1<<INTF7)` (clear pending), `EIMSK ← (1<<INT7)`, `sei`.
+- `.include "ir_rc5.asm"` added after `printf.asm`.
+- Removed `poll_rc5` stub and its call from main loop (ISR sets `rc5_new` directly, no polling routine needed).
+
+### Why interrupt-driven RC5 (architecture note)
+Forum (22.05) accepts polling or interrupts with justification. For the IR decoder, INT7 is clearly the right pick: without it, the main loop would have to busy-wait on PE7 continuously, blocking the LCD refresh and the temp-reading cadence. With INT7, the ~25 ms decode runs only when a button is pressed, which is rare relative to the 750 ms DS18B20 conversion cycle, so it doesn't disturb anything. The main loop itself stays cooperative polling (consuming `rc5_new` flag) — clean separation between event capture (ISR) and event dispatch (main).
+
+### `REPORT.md` — new
+Markdown draft of the technical report, mirroring the LaTeX section structure (Description générale / Manuel d'utilisation / Rapport technique) so V can copy-paste into `MCU2026-GXXX.tex`. Sections filled in for the work done so far (V's parts: IR/RC5, LCD, state machine). R's parts (servo, DS18B20) have `*(à compléter par R)*` placeholders.

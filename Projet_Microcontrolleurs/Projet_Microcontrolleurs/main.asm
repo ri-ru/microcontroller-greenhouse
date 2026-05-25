@@ -1,7 +1,7 @@
 ; file	main.asm   target ATmega128L-4MHz-STK300
-; purpose serre: state-machine skeleton (NORMAL / SET / SLEEP)
-;         RC5 remote drives the modes, LCD shows status,
-;         servo + temp are R's parts (stubs for now)
+; purpose serre: state-machine (NORMAL / SET / SLEEP), LCD, RC5 ISR
+;         RC5 decode par interruption (INT7 sur PE7),
+;         servo et temperature: parties de R (stubs ici)
 
 .include "macros.asm"
 .include "definitions.asm"
@@ -15,10 +15,10 @@
 .equ	mode_var	= 0x0260
 .equ	target_temp	= 0x0261	; consigne en degC
 .equ	window_open	= 0x0262	; 0=closed, 1=open
-.equ	rc5_cmd		= 0x0263	; last RC5 command byte
-.equ	rc5_new		= 0x0264	; flag: 1 = fresh cmd waiting
+.equ	rc5_cmd		= 0x0263	; derniere commande RC5
+.equ	rc5_new		= 0x0264	; flag: 1 = commande fraiche
 
-; === RC5 button codes (placeholders, a calibrer avec le scope) ===
+; === RC5 button codes (a confirmer avec la telecommande) ===
 .equ	KEY_SET		= 0x12
 .equ	KEY_UP		= 0x20
 .equ	KEY_DOWN	= 0x21
@@ -26,15 +26,21 @@
 .equ	KEY_OPEN	= 0x10
 .equ	KEY_CLOSE	= 0x11
 
-; === reset vector ===
+; === interrupt vector table ===
 .org	0
 	jmp	reset
+.org	INT7addr
+	rjmp	rc5_isr
 
 reset:
 	LDSP	RAMEND
-	in	w, MCUCR			; enable external SRAM (LCD memory map)
+	in	w, MCUCR			; enable external SRAM (LCD)
 	sbr	w, (1<<SRE)+(1<<SRW10)
 	out	MCUCR, w
+
+	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
+	cbi	PORTE, IR			; pas de pull-up interne
+
 	rcall	LCD_init
 
 	; etat initial
@@ -42,16 +48,23 @@ reset:
 	STI	target_temp, 25
 	STI	window_open, 0
 	STI	rc5_new,     0
+
+	; INT7: front descendant sur PE7
+	OUTEI	EICRB, (1<<ISC71)
+	OUTI	EIFR,  (1<<INTF7)		; effacer flag eventuel
+	OUTI	EIMSK, (1<<INT7)		; activer INT7
+	sei
 	rjmp	main
 
 .include "lcd.asm"
 .include "printf.asm"
+.include "ir_rc5.asm"
 
 ; ==============================================================
-;  main loop : poll RC5 -> dispatch -> refresh LCD
+;  main loop : dispatch sur le mode -> rafraichir LCD
+;  (la commande RC5 est deposee par l'ISR, on lit juste rc5_new)
 ; ==============================================================
 main:
-	rcall	poll_rc5
 	rcall	dispatch
 	rcall	lcd_refresh
 	rjmp	main
@@ -64,7 +77,7 @@ dispatch:
 	JK	w, MODE_SLEEP,  do_sleep
 	ret
 
-; --- NORMAL : RC5 can trigger SET, SLEEP, open/close manuel ---
+; --- NORMAL : RC5 peut declencher SET, SLEEP, open/close manuel ---
 do_normal:
 	lds	w, rc5_new
 	tst	w
@@ -139,13 +152,6 @@ open_window:
 ; TODO R: bouger le servo en position fermee
 close_window:
 	STI	window_open, 0
-	ret
-
-; === RC5 input - stub pour V ===
-; TODO V: quand une trame RC5 vient d'etre decodee,
-;         stocker l'octet de commande dans rc5_cmd
-;         et mettre rc5_new = 1
-poll_rc5:
 	ret
 
 ; === LCD refresh ===
