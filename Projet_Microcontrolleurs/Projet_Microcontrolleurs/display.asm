@@ -12,9 +12,10 @@ lcd_refresh:
 	breq	lr_skip
 	STI	lcd_dirty, 0
 	lds	w, mode_var
-	_JK	w, MODE_NORMAL, show_normal
-	_JK	w, MODE_SET,    show_set
-	_JK	w, MODE_SLEEP,  show_sleep
+	_JK	w, MODE_NORMAL,  show_normal
+	_JK	w, MODE_SET,     show_set
+	_JK	w, MODE_SLEEP,   show_sleep
+	_JK	w, MODE_HISTORY, show_history
 lr_skip:
 	ret
 
@@ -41,6 +42,21 @@ show_sleep:
 	rcall	LCD_home
 	PRINTF	LCD
 .db	"Sleeping...     ",0
+	ret
+
+; HISTORY : Min sur la ligne 1, Max sur la ligne 2.
+; Les valeurs viennent de la SRAM (mirror de l'EEPROM, charge au boot
+; et entretenu par history_update dans thermo.asm).
+show_history:
+	rcall	LCD_home
+	lds	a0, min_temp
+	lds	a1, min_temp+1
+	PRINTF	LCD
+.db	"Min:",FFRAC2+FSIGN,a,4,$22," C    ",LF,0
+	lds	a0, max_temp
+	lds	a1, max_temp+1
+	PRINTF	LCD
+.db	"Max:",FFRAC2+FSIGN,a,4,$22," C    ",0
 	ret
 
 ; ecran d'accueil partage (boot + reveil de SLEEP)
