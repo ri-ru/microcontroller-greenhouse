@@ -75,8 +75,10 @@ reset:
 	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
 	cbi	PORTE, IR			; pas de pull-up interne
 
-	sbi	DDRC,  SERVO1			; PC4 en sortie (servo Futaba)
-	cbi	PORTC, SERVO1			; idle bas
+	; PORTC est pris par le bus d'adresse externe (SRE) -> servo sur PORTF.
+	; (note: PF4 = JTAG TCK par defaut, fusible JTAGEN doit etre desactive)
+	sbi	DDRF,  SERVO1			; PF4 en sortie (servo Futaba)
+	cbi	PORTF, SERVO1			; idle bas
 
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init

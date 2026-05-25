@@ -31,9 +31,12 @@ readT:
 	STI	convertT_ended, 0		; consommer le flag
 
 	; en SLEEP: l'afficheur est vide, on n'a rien a faire
+	; (brne+rjmp : breq trop court pour rt_done apres le PRINTF .db)
 	lds	w, mode_var
 	cpi	w, MODE_SLEEP
-	breq	rt_done
+	brne	rt_not_sleep
+	rjmp	rt_done
+rt_not_sleep:
 
 	; --- positionner le curseur sur ligne 2 (sauf en HISTORY) ---
 	cpi	w, MODE_HISTORY
@@ -74,7 +77,9 @@ rt_skip_printf:
 	; --- en HISTORY: pas de regulation thermique ---
 	lds	w, mode_var
 	cpi	w, MODE_HISTORY
-	breq	rt_done
+	brne	rt_regul
+	rjmp	rt_done
+rt_regul:
 
 	; --- comparaison a la consigne ---
 	; recharger la consigne: b3:b2 = target_temp * 16 (format DS18B20)
