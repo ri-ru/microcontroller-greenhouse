@@ -74,10 +74,11 @@ rt_skip_printf:
 	; --- maj historique min/max (toujours, hors SLEEP) ---
 	rcall	history_update
 
-	; --- en HISTORY: pas de regulation thermique ---
+	; --- regulation seulement en NORMAL (en SET on edite la consigne,
+	;     en HISTORY on ne touche pas la fenetre, en SLEEP on est sorti) ---
 	lds	w, mode_var
-	cpi	w, MODE_HISTORY
-	brne	rt_regul
+	cpi	w, MODE_NORMAL
+	breq	rt_regul
 	rjmp	rt_done
 rt_regul:
 
