@@ -129,10 +129,8 @@ reset:
 ; readT (lecture DS18B20) ne tourne que quand le flag Timer0 est leve,
 ; donc la plupart des iterations sont rapides et le servo voit ~50 Hz.
 main:
-	; pin LOW (PF4) -- lds/sts car PORTF est en I/O etendu
-	lds	w, PORTF
-	andi	w, ~(1<<SERVO1)
-	sts	PORTF, w
+	; pin LOW (seul SERVO1 est utilise sur PORTF, on ecrit tout a 0)
+	OUTEI	PORTF, 0
 
 	WAIT_US	18000				; phase basse, le servo "se repose"
 
@@ -144,10 +142,8 @@ main:
 m_no_temp:
 	rcall	lcd_refresh
 
-	; pin HIGH (PF4)
-	lds	w, PORTF
-	ori	w, (1<<SERVO1)
-	sts	PORTF, w
+	; pin HIGH
+	OUTEI	PORTF, (1<<SERVO1)
 
 	; largeur d'impulsion : 1.9 ms ouvert, 1.52 ms ferme
 	lds	w, window_open
@@ -160,9 +156,7 @@ m_pulse_close:
 m_pulse_end:
 
 	; on remet LOW tout de suite (pas attendre la prochaine iteration)
-	lds	w, PORTF
-	andi	w, ~(1<<SERVO1)
-	sts	PORTF, w
+	OUTEI	PORTF, 0
 
 	rjmp	main
 
