@@ -1,7 +1,8 @@
 ; file	main.asm   target ATmega128L-4MHz-STK300
-; purpose serre: state-machine (NORMAL / SET / SLEEP), LCD, RC5 ISR
-;         RC5 decode par interruption (INT7 sur PE7),
-;         servo et temperature: parties de R (stubs ici)
+; purpose serre: state-machine (NORMAL / SET / SLEEP), boucle principale,
+;         vector table. RC5 decode dans ir_rc5.asm, temperature dans
+;         thermo.asm, servo (fenetre) dans servo.asm, affichage dans
+;         display.asm.
 
 .include "macros.asm"
 .include "definitions.asm"
@@ -12,27 +13,53 @@
 .equ	MODE_SLEEP	= 2
 
 ; === SRAM state (printf-compatible range 0x0260..0x02ff) ===
-.equ	mode_var	= 0x0260
-.equ	target_temp	= 0x0261	; consigne en degC
-.equ	window_open	= 0x0262	; 0=closed, 1=open
-.equ	rc5_cmd		= 0x0263	; derniere commande RC5
-.equ	rc5_new		= 0x0264	; flag: 1 = commande fraiche
+.equ	mode_var		= 0x0260
+.equ	target_temp		= 0x0261	; consigne en degC
+.equ	window_open		= 0x0262	; 0=closed, 1=open
+.equ	rc5_cmd			= 0x0263	; derniere commande RC5
+.equ	rc5_new			= 0x0264	; flag: 1 = commande fraiche
+.equ	rc5_last_tog	= 0x0265	; dernier bit toggle (filtre auto-repeat RC5)
+.equ	lcd_dirty		= 0x0266	; flag: 1 = ligne 2 LCD doit etre redessinee
+.equ	convertT_ended	= 0x0267	; flag: 1 = effectuer la sous-routine readT
 
-; === RC5 button codes (a confirmer avec la telecommande) ===
-.equ	KEY_SET		= 0x12
-.equ	KEY_UP		= 0x20
-.equ	KEY_DOWN	= 0x21
-.equ	KEY_POWER	= 0x0c
-.equ	KEY_OPEN	= 0x10
-.equ	KEY_CLOSE	= 0x11
+; === RC5 button codes (Vivanco UR Z2, releves le 2026-05-25) ===
+; bouton    code   usage
+; ------    ----   -----
+; 0..9      00..09 -
+; -/--      0x0a   libre
+; POWER     0x0c   toggle SLEEP
+; MUTE      0x0d   libre
+; VOL+      0x10   OPEN  (fenetre)
+; VOL-      0x11   CLOSE (fenetre)
+; CH+       0x20   UP    (consigne)
+; CH-       0x21   DOWN  (consigne)
+; GUIDE     0x22   libre
+; AV        0x38   SET   (entree/sortie mode SET)
+; SET/TV/DVB/FAV : pas d'emission RC5 (boutons de config remote)
+.equ	KEY_SET		= 0x38		; AV
+.equ	KEY_UP		= 0x20		; CH+
+.equ	KEY_DOWN	= 0x21		; CH-
+.equ	KEY_POWER	= 0x0c		; POWER
+.equ	KEY_OPEN	= 0x10		; VOL+
+.equ	KEY_CLOSE	= 0x11		; VOL-
 
 ; === interrupt vector table ===
 .org	0
 	jmp	reset
 .org	INT7addr
-	rjmp	rc5_isr			; RC5 (V)
+	rjmp	rc5_isr			; RC5 (V) - dans ir_rc5.asm
 .org	OVF0addr
-	rjmp	overflow0		; Timer0 overflow -> lecture temperature (R)
+	rjmp	overflow0		; Timer0 -> temperature (R) - dans thermo.asm
+
+; --- librairies (incluses ici pour que PRINTF/LCD_* soient definis
+;     avant reset, qui les utilise pour l'ecran d'accueil) ---
+.include "lcd.asm"
+.include "printf.asm"
+.include "wire1.asm"
+.include "ir_rc5.asm"
+.include "servo.asm"			; open_window / close_window (servo PWM)
+.include "thermo.asm"			; overflow0 (lecture DS18B20 + seuil)
+.include "display.asm"			; lcd_refresh, show_*, do_splash
 
 reset:
 	LDSP	RAMEND
@@ -46,39 +73,37 @@ reset:
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
 
+	; --- ecran d'accueil (2s avant que Timer0/RC5 ne reprennent la main) ---
+	rcall	do_splash
+
 	; etat initial
 	STI	mode_var,    MODE_NORMAL
 	STI	target_temp, 25
 	STI	window_open, 0
 	STI	rc5_cmd,     0
 	STI	rc5_new,     0
-
-	; consigne pour la comparaison de R (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
-	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
-	ldi	b3, 0b00000001
+	STI	rc5_last_tog, 0xff		; valeur impossible -> 1ere pression valide
+	STI	lcd_dirty,   1			; forcer 1er affichage
 
 	; INT7: front descendant sur PE7
 	OUTEI	EICRB, (1<<ISC71)
 	OUTI	EIFR,  (1<<INTF7)		; effacer flag eventuel
 	OUTI	EIMSK, (1<<INT7)		; activer INT7
 
-	; Timer0: source asynchrone (R), interruption overflow active
-	OUTI	ASSR,  (1<<AS0)
-	OUTI	TCCR0, 1			; prescaler = 1
+	; Timer0: source asynchrone, interruption overflow active (ordre R)
+	; TCCR0=5 -> prescaler 128 -> 32768/128/256 = 1 Hz (overflow ~1s)
 	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
+	OUTI	ASSR,  (1<<AS0)
+	OUTI	TCCR0, 5
+	sei
 
 	; premiere conversion DS18B20 (declenche la suivante depuis l'ISR)
+	; (la consigne b3:b2 est rechargee depuis target_temp dans l'ISR)
 	rcall	wire1_reset
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
 
-	sei
 	rjmp	main
-
-.include "lcd.asm"
-.include "printf.asm"
-.include "wire1.asm"
-.include "ir_rc5.asm"
 
 ; ==============================================================
 ;  main loop : dispatch sur le mode -> rafraichir LCD
@@ -92,9 +117,9 @@ main:
 ; === mode dispatch ===
 dispatch:
 	lds	w, mode_var
-	JK	w, MODE_NORMAL, do_normal
-	JK	w, MODE_SET,    do_set
-	JK	w, MODE_SLEEP,  do_sleep
+	_JK	w, MODE_NORMAL, do_normal
+	_JK	w, MODE_SET,    do_set
+	_JK	w, MODE_SLEEP,  do_sleep
 	ret
 
 ; --- NORMAL : RC5 peut declencher SET, SLEEP, open/close manuel ---
@@ -104,10 +129,10 @@ do_normal:
 	breq	dn_end
 	lds	a0, rc5_cmd
 	STI	rc5_new, 0
-	JK	a0, KEY_SET,   to_set
-	JK	a0, KEY_POWER, to_sleep
-	JK	a0, KEY_OPEN,  open_window
-	JK	a0, KEY_CLOSE, close_window
+	_JK	a0, KEY_SET,   to_set
+	_JK	a0, KEY_POWER, to_sleep
+	_JK	a0, KEY_OPEN,  open_window
+	_JK	a0, KEY_CLOSE, close_window
 dn_end:
 	ret
 
@@ -118,9 +143,10 @@ do_set:
 	breq	ds_end
 	lds	a0, rc5_cmd
 	STI	rc5_new, 0
-	JK	a0, KEY_SET,  to_normal
-	JK	a0, KEY_UP,   target_up
-	JK	a0, KEY_DOWN, target_down
+	_JK	a0, KEY_SET,   to_normal
+	_JK	a0, KEY_POWER, to_sleep		; POWER en SET -> SLEEP
+	_JK	a0, KEY_UP,    target_up
+	_JK	a0, KEY_DOWN,  target_down
 ds_end:
 	ret
 
@@ -131,20 +157,40 @@ do_sleep:
 	breq	dz_end
 	lds	a0, rc5_cmd
 	STI	rc5_new, 0
-	JK	a0, KEY_POWER, to_normal
+	_JK	a0, KEY_POWER, to_normal
 dz_end:
 	ret
 
 ; === transitions de mode ===
 to_normal:
-	STI	mode_var, MODE_NORMAL
+	lds	w, mode_var			; w = ancien mode
+	cpi	w, MODE_SLEEP			; tester AVANT que STI ne clobber w
+	STI	mode_var, MODE_NORMAL		; ldi/sts ne touchent pas SREG -> Z preserve
+	STI	lcd_dirty, 1
+	brne	tn_end				; vient de SET, pas de splash
+
+	; reveil de SLEEP : refaire le splash (LCD est deja allume, juste vide)
+	OUTI	TIMSK, 0			; suspendre Timer0 le temps du splash
+	rcall	do_splash
+	OUTI	TIMSK, (1<<TOIE0)		; reactiver Timer0
+tn_end:
 	ret
 to_set:
 	STI	mode_var, MODE_SET
+	STI	lcd_dirty, 1
 	ret
 to_sleep:
 	STI	mode_var, MODE_SLEEP
-	rjmp	close_window		; force fermeture en entrant en sleep
+	rcall	close_window		; force fermeture en entrant en sleep
+
+	; ecran d'au revoir 2s, puis on efface l'afficheur
+	rcall	LCD_home
+	PRINTF	LCD
+.db	"Sleeping...     ",LF,"                ",0
+	WAIT_MS	2000
+	rcall	LCD_clear		; LCD vide (mais toujours allume)
+	STI	lcd_dirty, 0		; ne rien redessiner tant qu'on est en SLEEP
+	ret
 
 ; === reglage de la consigne (5..40 degC) ===
 target_up:
@@ -153,6 +199,7 @@ target_up:
 	brsh	tu_end
 	inc	w
 	sts	target_temp, w
+	STI	lcd_dirty, 1
 tu_end:
 	ret
 target_down:
@@ -161,69 +208,6 @@ target_down:
 	brlo	td_end
 	dec	w
 	sts	target_temp, w
+	STI	lcd_dirty, 1
 td_end:
-	ret
-
-; === window control - stubs pour R ===
-; TODO R: bouger le servo en position ouverte (M4, PORTB pin SERVO1)
-open_window:
-	STI	window_open, 1
-	ret
-; TODO R: bouger le servo en position fermee
-close_window:
-	STI	window_open, 0
-	ret
-
-; ==============================================================
-;  overflow0 : ISR Timer0 (lecture temperature DS18B20)
-; --------------------------------------------------------------
-;  PLACEHOLDER. R: colle ici le corps de ton ISR overflow0 de
-;  wire1_temp2.asm. Conventions pour eviter de casser le main loop :
-;
-;    - b2, b3 = consigne en format DS18B20 (initialises en reset,
-;      a ne PAS modifier ni dans l'ISR ni dans le main loop).
-;      Pour relire la consigne SRAM (target_temp en degC) :
-;        lds w, target_temp ; ldi b3, 0 ; mov b2, w
-;        lsl b2 ; rol b3 ; lsl b2 ; rol b3
-;        lsl b2 ; rol b3 ; lsl b2 ; rol b3   ; *16 -> format DS18B20
-;
-;    - L'ISR doit empiler SREG (via _sreg = r1) puis tous les
-;      registres modifies par les routines appelees :
-;      au minimum r0, w, u, a0..a3, b0, b1, c0, x, y, z.
-;
-;    - rcall open_window / close_window est OK : ces routines sont
-;      definies plus haut et mettent a jour window_open dans la SRAM
-;      (a remplacer par la commande servo le moment venu).
-; ==============================================================
-overflow0:
-	in	_sreg, SREG
-	; TODO R: pousser les registres, copier le corps de l'ISR de
-	;         wire1_temp2.asm, depiler, puis reti.
-	out	SREG, _sreg
-	reti
-
-; === LCD refresh ===
-lcd_refresh:
-	lds	w, mode_var
-	JK	w, MODE_NORMAL, show_normal
-	JK	w, MODE_SET,    show_set
-	JK	w, MODE_SLEEP,  show_sleep
-	ret
-
-show_normal:
-	rcall	LCD_home
-	PRINTF	LCD				; DEBUG: 'last=XX' = dernier code RC5 recu (a retirer apres capture)
-.db	"NORMAL  last=",FHEX,low(rc5_cmd)," ",LF,"set=",FDEC|FDIG2,low(target_temp)," win=",FDEC,low(window_open),"    ",0
-	ret
-
-show_set:
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"SET MODE        ",LF,"target=",FDEC,low(target_temp)," degC ",0
-	ret
-
-show_sleep:
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"SLEEPING        ",LF,"window closed   ",0
 	ret
