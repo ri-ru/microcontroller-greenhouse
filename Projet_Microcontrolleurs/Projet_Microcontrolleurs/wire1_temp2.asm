@@ -18,6 +18,7 @@
 
 ; === interrupt service routines === 
 overflow0:
+	in _sreg, SREG
 	rcall	lcd_home			; place cursor to home position
 	rcall	wire1_reset			; send a reset pulse
 	CA	wire1_write, skipROM
@@ -43,6 +44,7 @@ overflow0:
 	brbs 6, PC+2 ; branch if T is set <=> the window is already closed
 	brbs 2, PC+1 ; branch if N is set <=> Temp < limit
 	nop;rcall open_window
+	out SREG, _sreg
 	reti
 
 
@@ -52,7 +54,6 @@ reset:
 	LDSP	RAMEND			; load stack pointer (SP)
 	rcall	wire1_init		; initialize 1-wire(R) interface
 	rcall	lcd_init		; initialize LCD
-	rjmp	main
 	OUTI	TIMSK,(1<<TOIE0)	; Timer0 Overflow Interrupt Enable
 	OUTI	ASSR,(1<<AS0)
 	OUTI	TCCR0,1
