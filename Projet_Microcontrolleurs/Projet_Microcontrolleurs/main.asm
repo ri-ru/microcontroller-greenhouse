@@ -30,7 +30,9 @@
 .org	0
 	jmp	reset
 .org	INT7addr
-	rjmp	rc5_isr
+	rjmp	rc5_isr			; RC5 (V)
+.org	OVF0addr
+	rjmp	overflow0		; Timer0 overflow -> lecture temperature (R)
 
 reset:
 	LDSP	RAMEND
@@ -41,6 +43,7 @@ reset:
 	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
 	cbi	PORTE, IR			; pas de pull-up interne
 
+	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
 
 	; etat initial
@@ -50,15 +53,31 @@ reset:
 	STI	rc5_cmd,     0
 	STI	rc5_new,     0
 
+	; consigne pour la comparaison de R (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
+	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
+	ldi	b3, 0b00000001
+
 	; INT7: front descendant sur PE7
 	OUTEI	EICRB, (1<<ISC71)
 	OUTI	EIFR,  (1<<INTF7)		; effacer flag eventuel
 	OUTI	EIMSK, (1<<INT7)		; activer INT7
+
+	; Timer0: source asynchrone (R), interruption overflow active
+	OUTI	ASSR,  (1<<AS0)
+	OUTI	TCCR0, 1			; prescaler = 1
+	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
+
+	; premiere conversion DS18B20 (declenche la suivante depuis l'ISR)
+	rcall	wire1_reset
+	CA	wire1_write, skipROM
+	CA	wire1_write, convertT
+
 	sei
 	rjmp	main
 
 .include "lcd.asm"
 .include "printf.asm"
+.include "wire1.asm"
 .include "ir_rc5.asm"
 
 ; ==============================================================
@@ -154,6 +173,34 @@ open_window:
 close_window:
 	STI	window_open, 0
 	ret
+
+; ==============================================================
+;  overflow0 : ISR Timer0 (lecture temperature DS18B20)
+; --------------------------------------------------------------
+;  PLACEHOLDER. R: colle ici le corps de ton ISR overflow0 de
+;  wire1_temp2.asm. Conventions pour eviter de casser le main loop :
+;
+;    - b2, b3 = consigne en format DS18B20 (initialises en reset,
+;      a ne PAS modifier ni dans l'ISR ni dans le main loop).
+;      Pour relire la consigne SRAM (target_temp en degC) :
+;        lds w, target_temp ; ldi b3, 0 ; mov b2, w
+;        lsl b2 ; rol b3 ; lsl b2 ; rol b3
+;        lsl b2 ; rol b3 ; lsl b2 ; rol b3   ; *16 -> format DS18B20
+;
+;    - L'ISR doit empiler SREG (via _sreg = r1) puis tous les
+;      registres modifies par les routines appelees :
+;      au minimum r0, w, u, a0..a3, b0, b1, c0, x, y, z.
+;
+;    - rcall open_window / close_window est OK : ces routines sont
+;      definies plus haut et mettent a jour window_open dans la SRAM
+;      (a remplacer par la commande servo le moment venu).
+; ==============================================================
+overflow0:
+	in	_sreg, SREG
+	; TODO R: pousser les registres, copier le corps de l'ISR de
+	;         wire1_temp2.asm, depiler, puis reti.
+	out	SREG, _sreg
+	reti
 
 ; === LCD refresh ===
 lcd_refresh:

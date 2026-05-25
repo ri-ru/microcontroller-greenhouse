@@ -63,5 +63,20 @@ Line 1 of NORMAL mode now reads `NORMAL  last=XX` where `XX` is the last decoded
 
 `rc5_cmd` is now initialised to 0 in reset so the field reads `00` before any button is pressed instead of garbage.
 
+### `main.asm` — scaffolding for R's temperature ISR (no conflicts)
+After R updated `wire1_temp2.asm` (still standalone, not actually being built — `.asmproj` entry is `main.asm`), I added the integration hooks to `main.asm` so R can drop her ISR body in without anything breaking:
+
+- **Vector table:** added `.org OVF0addr` → `rjmp overflow0` (next to the existing INT7 entry).
+- **`reset:`** now calls `rcall wire1_init`, loads `b3:b2 = 0x0190` (= 25 °C × 16 in DS18B20 raw format) as the comparison limit, configures Timer0 in async mode matching R's settings (`ASSR=AS0`, `TCCR0=1`, `TIMSK=TOIE0`), kicks off the first DS18B20 conversion, then `sei`.
+- **`.include "wire1.asm"`** added after `printf.asm` so low-level 1-wire calls (`wire1_reset`, `wire1_write`, `wire1_read`, `skipROM`, `convertT`, …) are resolved.
+- **`overflow0:` stub** added near the `open_window`/`close_window` stubs. Currently just saves/restores SREG and `reti`s. Marked with a TODO block telling R exactly what to paste in and which register-save conventions to follow (b2/b3 stay reserved, push everything else the body modifies).
+
+`wire1_temp2.asm` was **not** modified — stays as R's standalone reference. When R is ready, she copies her ISR body into the `overflow0` stub in `main.asm` and either deletes `wire1_temp2.asm` or keeps it as a test scratch file.
+
+**Risks / not yet handled:**
+- Timer0 in async mode (`AS0=1`) requires an external 32 kHz crystal on TOSC1/TOSC2 — if the STK-300 isn't wired for it, Timer0 won't tick and `overflow0` never fires. R chose this; we'll find out at the bench.
+- The async-Timer0 init order doesn't follow the datasheet's strict sequence (disable IE → set AS0 → write TCCR0 → wait for *UB bits → clear TIFR → enable IE). Matches R's order; can be tightened later if Timer0 misbehaves.
+- The limit `b3:b2` is loaded once at reset, not re-loaded from `target_temp` SRAM when SET mode changes the consigne. Either R re-reads SRAM inside the ISR, or we add a notify hook in `target_up`/`target_down`. Flagged in the ISR's TODO comment.
+
 ### `REPORT.md` — new
 Markdown draft of the technical report, mirroring the LaTeX section structure (Description générale / Manuel d'utilisation / Rapport technique) so V can copy-paste into `MCU2026-GXXX.tex`. Sections filled in for the work done so far (V's parts: IR/RC5, LCD, state machine). R's parts (servo, DS18B20) have `*(à compléter par R)*` placeholders.
