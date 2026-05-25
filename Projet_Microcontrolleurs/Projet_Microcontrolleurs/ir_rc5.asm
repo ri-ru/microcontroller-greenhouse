@@ -24,8 +24,18 @@ rc5_loop:
 	DJNZ	b2, rc5_loop
 
 	com	b0			; format inverse (RC5)
+
+	; filtrer l'auto-repeat: bit toggle = b1 bit 3
+	; ne lever rc5_new que si le toggle a change
+	mov	w, b1
+	andi	w, 0x08
+	lds	u, rc5_last_tog
+	cp	w, u
+	breq	rc5_skip		; meme toggle -> trame repetee, ignorer
+	sts	rc5_last_tog, w
 	sts	rc5_cmd, b0
 	STI	rc5_new, 1
+rc5_skip:
 
 	OUTI	EIFR, (1<<INTF7)	; effacer flag INT7 declenche par les fronts pendant le decodage
 

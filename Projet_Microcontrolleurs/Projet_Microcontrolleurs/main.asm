@@ -17,6 +17,7 @@
 .equ	window_open	= 0x0262	; 0=closed, 1=open
 .equ	rc5_cmd		= 0x0263	; derniere commande RC5
 .equ	rc5_new		= 0x0264	; flag: 1 = commande fraiche
+.equ	rc5_last_tog	= 0x0265	; dernier bit toggle (filtre auto-repeat RC5)
 
 ; === RC5 button codes (Vivanco UR Z2, releves le 2026-05-25) ===
 ; bouton    code   usage
@@ -65,6 +66,7 @@ reset:
 	STI	window_open, 0
 	STI	rc5_cmd,     0
 	STI	rc5_new,     0
+	STI	rc5_last_tog, 0xff		; valeur impossible -> 1ere pression valide
 
 	; consigne pour la comparaison de R (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
 	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
@@ -131,9 +133,10 @@ do_set:
 	breq	ds_end
 	lds	a0, rc5_cmd
 	STI	rc5_new, 0
-	JK	a0, KEY_SET,  to_normal
-	JK	a0, KEY_UP,   target_up
-	JK	a0, KEY_DOWN, target_down
+	JK	a0, KEY_SET,   to_normal
+	JK	a0, KEY_POWER, to_sleep		; POWER en SET -> SLEEP
+	JK	a0, KEY_UP,    target_up
+	JK	a0, KEY_DOWN,  target_down
 ds_end:
 	ret
 
