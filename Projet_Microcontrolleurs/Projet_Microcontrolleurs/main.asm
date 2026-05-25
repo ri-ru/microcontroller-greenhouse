@@ -164,10 +164,8 @@ to_normal:
 	cpi	w, MODE_SLEEP
 	brne	tn_done				; vient de SET, pas de splash
 
-	; reveil de SLEEP : rallumer le LCD et refaire le splash
+	; reveil de SLEEP : refaire le splash (LCD est deja allume, juste vide)
 	OUTI	TIMSK, 0			; suspendre Timer0 le temps du splash
-	rcall	LCD_clear
-	CW	LCD_wr_ir, 0b00001100		; LCD display = ON
 	rcall	do_splash
 	OUTI	TIMSK, (1<<TOIE0)		; reactiver Timer0
 tn_done:
@@ -180,12 +178,12 @@ to_sleep:
 	STI	mode_var, MODE_SLEEP
 	rcall	close_window		; force fermeture en entrant en sleep
 
-	; ecran d'au revoir 2s, puis on eteint l'afficheur
+	; ecran d'au revoir 2s, puis on efface l'afficheur
 	rcall	LCD_home
 	PRINTF	LCD
 .db	"Sleeping...     ",LF,"                ",0
 	WAIT_MS	2000
-	CW	LCD_wr_ir, 0b00001000	; LCD display = OFF
+	rcall	LCD_clear		; LCD vide (mais toujours allume)
 	STI	lcd_dirty, 0		; ne rien redessiner tant qu'on est en SLEEP
 	ret
 
