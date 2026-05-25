@@ -195,6 +195,21 @@
 
 
 ; --------------------------------------------------------------
+;  Library includes (placed BEFORE reset on purpose)
+; --------------------------------------------------------------
+;
+;  The order of .include matters here. reset itself uses PRINTF
+;  and LCD_* (for the welcome screen), so those library symbols
+;  MUST already be defined by the time the assembler reaches
+;  reset. That's why we include the libraries first.
+
+    .include "lcd.asm"      ; LCD_init, LCD_home, LCD_lf, LCD_clear, ...
+    .include "printf.asm"   ; PRINTF macro + supporting subroutines
+    .include "wire1.asm"    ; wire1_init, wire1_reset, wire1_read, wire1_write, ...
+    .include "ir_rc5.asm"   ; the rc5_isr subroutine
+
+
+; --------------------------------------------------------------
 ;  reset:  one-shot initialization, runs once at power-on
 ; --------------------------------------------------------------
 
@@ -223,6 +238,17 @@ reset:
 
     rcall wire1_init       ; init the 1-wire bus (DS18B20 sensor)
     rcall LCD_init         ; init the LCD controller
+
+    ; --- welcome screen (3 seconds before normal display kicks in) ---
+    rcall LCD_home
+    PRINTF LCD
+.db "Hello gardener!",0
+    WAIT_MS 3000           ; busy-wait for 3000 ms (a TP macro)
+    rcall LCD_clear        ; wipe the screen so it's clean for the real display
+    ; Note : this WAIT_MS happens BEFORE we enable interrupts (sei
+    ; is further down). That's deliberate -- it means the welcome
+    ; screen stays put for the full 3 seconds, undisturbed by
+    ; Timer0 overflows or IR button presses.
 
     ; --- initial state ---
     STI   mode_var,    MODE_NORMAL
@@ -273,21 +299,6 @@ reset:
     ; threshold used by the window control.
 
     rjmp  main                 ; jump to the main loop forever
-
-
-; --------------------------------------------------------------
-;  Library includes (after reset, before main)
-; --------------------------------------------------------------
-
-    .include "lcd.asm"      ; LCD_init, LCD_home, LCD_lf, LCD_putc, ...
-    .include "printf.asm"   ; PRINTF macro + supporting subroutines
-    .include "wire1.asm"    ; wire1_init, wire1_reset, wire1_read, wire1_write, ...
-    .include "ir_rc5.asm"   ; the rc5_isr subroutine
-
-    ; These are placed AFTER reset and BEFORE main on purpose :
-    ; the order does not matter for correctness (everything is
-    ; labeled and the linker finds it), but this is the order
-    ; used in all the TPs.
 
 
 ; ==============================================================
@@ -559,19 +570,29 @@ overflow0:
     rcall wire1_read                ; second byte = MSB -> a0
     mov   a1, a0                    ; a1 = MSB
     mov   a0, c0                    ; a0 = LSB ; now a1:a0 = full 16-bit value
+
+    ; PRINTF/FFRAC2 internally chews up a0..a3 while it formats the
+    ; number into digits. After PRINTF returns, the temperature is
+    ; gone from a1:a0. We still need it for the comparison below,
+    ; so we push it on the stack and pop it back after.
+    push  a0
+    push  a1
     PRINTF LCD
-.db "temp=",FFRAC2+FSIGN,a,4,$42,"C ",CR,0
+.db "Temp: ",FFRAC2+FSIGN,a,4,$22," C  ",CR,0
     ; printf format reads :
-    ;   "temp="                : literal text
-    ;   FFRAC2+FSIGN, a, 4, $42 : print register pair a (a1:a0) as a
-    ;                            signed fractional with 2 decimals,
-    ;                            4 digits, scale 1/16 (0x42)
-    ;   "C "                   : literal text
+    ;   "Temp: "               : literal text
+    ;   FFRAC2+FSIGN, a, 4, $22 : print register pair a (a1:a0) as a
+    ;                            signed fractional, 4 digits, 2 decimals,
+    ;                            with a format/scale byte ($22) that
+    ;                            tells the library how the value is scaled
+    ;   " C  "                 : literal text
     ;   CR, 0                  : carriage return + end marker
 
     rcall wire1_reset               ; kick off the NEXT conversion now,
     CA    wire1_write, skipROM      ; so it is ready ~1 s from now
     CA    wire1_write, convertT
+    pop   a1                        ; restore the temperature we saved
+    pop   a0                        ; (pop in reverse order!)
 
     ; --- window control by threshold (skip when in SLEEP) ---
     lds   w, mode_var
@@ -672,21 +693,35 @@ lr_skip:
 
 show_normal:
     rcall LCD_lf                 ; move cursor to line 2
+    ; NORMAL mode shows the target AND a human-readable window state.
+    ; We branch on window_open so the user reads "Open" / "Closed"
+    ; instead of a cryptic "win=0".
+    lds   w, window_open
+    tst   w
+    brne  show_normal_open       ; window open -> jump to the "Open" string
     PRINTF LCD
-.db "set=",FDEC|FDIG2,low(target_temp)," win=",FDEC,low(window_open),"    ",0
-    ; prints e.g. "set=25 win=0    "
+.db "Set:",FDEC|FDIG2,low(target_temp),"C. Closed.",0
+    ret
+show_normal_open:
+    PRINTF LCD
+.db "Set:",FDEC|FDIG2,low(target_temp),"C. Open.  ",0
+    ; The trailing two spaces overwrite the "d." leftover from
+    ; "Closed." -- the LCD never clears characters by itself, so
+    ; if we don't pad, old text stays on screen.
     ret
 
 show_set:
     rcall LCD_lf
     PRINTF LCD
-.db "SET target=",FDEC|FDIG2,low(target_temp)," dC",0
+.db "Set:",FDEC|FDIG2,low(target_temp),"C. <EDIT>.",0
+    ; the "<EDIT>" tag tells the user that CH+/CH- now adjust
+    ; the target.
     ret
 
 show_sleep:
     rcall LCD_lf
     PRINTF LCD
-.db "SLEEP win closed",0
+.db "Sleeping...     ",0
     ret
 
 
