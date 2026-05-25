@@ -70,27 +70,27 @@ reset:
 	STI	rc5_last_tog, 0xff		; valeur impossible -> 1ere pression valide
 	STI	lcd_dirty,   1			; forcer 1er affichage
 
-	; consigne pour la comparaison de R (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
-	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
-	ldi	b3, 0b00000001
-
 	; INT7: front descendant sur PE7
 	OUTEI	EICRB, (1<<ISC71)
 	OUTI	EIFR,  (1<<INTF7)		; effacer flag eventuel
 	OUTI	EIMSK, (1<<INT7)		; activer INT7
 
-	; Timer0: source asynchrone (R), interruption overflow active
+	; Timer0: source asynchrone, interruption overflow active (ordre R)
 	; TCCR0=5 -> prescaler 128 -> 32768/128/256 = 1 Hz (overflow ~1s)
+	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
 	OUTI	ASSR,  (1<<AS0)
 	OUTI	TCCR0, 5
-	OUTI	TIMSK, (1<<TOIE0)		; Timer0 overflow IE
+	sei
+
+	; consigne (b3:b2 = 25 degC en format DS18B20, 1/16e degC)
+	ldi	b2, 0b10010000			; 0x0190 = 400 = 25 * 16
+	ldi	b3, 0b00000001
 
 	; premiere conversion DS18B20 (declenche la suivante depuis l'ISR)
 	rcall	wire1_reset
 	CA	wire1_write, skipROM
 	CA	wire1_write, convertT
 
-	sei
 	rjmp	main
 
 .include "lcd.asm"
