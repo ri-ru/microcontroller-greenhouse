@@ -56,7 +56,7 @@ reset:
 	rcall	lcd_init		; initialize LCD
 	OUTI	TIMSK,(1<<TOIE0)	; Timer0 Overflow Interrupt Enable
 	OUTI	ASSR,(1<<AS0)
-	OUTI	TCCR0,1
+	OUTI	TCCR0,5
 	sei				; set global interrupt
 	ldi b2, 0b10010000
 	ldi b3, 0b00000001 ; load 25 C as limit temperature
