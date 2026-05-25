@@ -1,39 +1,19 @@
 ; file	servo.asm   target ATmega128L-4MHz-STK300
 ; purpose servo control for the greenhouse window
-;         signal sur PORTF bit SERVO1 (= PF4, module M4 / P7, Futaba S3003)
-;         (PORTC pris par le bus d'adresse externe SRE, on utilise PORTF)
+;         Le signal PWM lui-meme est genere dans la boucle principale
+;         (main.asm), TP10-style: pin LOW ~18 ms, puis travail, puis pin
+;         HIGH pendant 1.5/1.9 ms selon window_open. PORTF.SERVO1 = PF4.
 ;
-;  open_window  -> 13 impulsions PWM ~1.9ms (fenetre ouverte)
-;  close_window -> 13 impulsions PWM ~1.5ms (fenetre fermee)
-;
-;  PWM software, periode 20 ms. Bloque ~260 ms le temps que le servo
-;  atteigne la position. Appele depuis readT (boucle principale), pas
-;  depuis l'ISR -> INT7 (RC5) reste actif pendant le mouvement.
+;         open_window / close_window se contentent de mettre a jour
+;         l'etat (window_open) et le flag d'affichage. Le servo bouge
+;         tout seul a la prochaine impulsion.
 
 open_window:
-	ldi	w, 13				; 13 periodes de 20 ms
-opening:
-	P0	PORTF, SERVO1
-	WAIT_US	18100
-	P1	PORTF, SERVO1
-	WAIT_US	1900				; pulse ~1.9 ms -> position ouverte
-	dec	w
-	brne	opening
-	P0	PORTF, SERVO1			; idle bas
 	STI	window_open, 1
 	STI	lcd_dirty, 1
 	ret
 
 close_window:
-	ldi	w, 13
-closing:
-	P0	PORTF, SERVO1
-	WAIT_US	18480
-	P1	PORTF, SERVO1
-	WAIT_US	1520				; pulse ~1.52 ms -> position fermee
-	dec	w
-	brne	closing
-	P0	PORTF, SERVO1			; idle bas
 	STI	window_open, 0
 	STI	lcd_dirty, 1
 	ret

@@ -75,10 +75,12 @@ reset:
 	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
 	cbi	PORTE, IR			; pas de pull-up interne
 
-	; PORTC est pris par le bus d'adresse externe (SRE) -> servo sur PORTF.
+	; PORTA/PORTC pris par le bus d'adresse externe (SRE) -> servo sur PORTF.
+	; PORTF est en I/O etendu (>0x3F) : sbi/cbi/in/out interdits, on
+	; passe par OUTEI (sts) et lds/sts.
 	; (note: PF4 = JTAG TCK par defaut, fusible JTAGEN doit etre desactive)
-	sbi	DDRF,  SERVO1			; PF4 en sortie (servo Futaba)
-	cbi	PORTF, SERVO1			; idle bas
+	OUTEI	DDRF,  (1<<SERVO1)		; PF4 en sortie
+	OUTEI	PORTF, 0			; idle bas
 
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
@@ -121,15 +123,47 @@ reset:
 ;  main loop : dispatch sur le mode -> rafraichir LCD
 ;  (la commande RC5 est deposee par l'ISR, on lit juste rc5_new)
 ; ==============================================================
+; --- TP10-style servo PWM, melangee a la boucle principale ---
+; Periode ~20 ms : pin LOW (~18 ms WAIT) -> dispatch/readT/lcd_refresh
+; -> pin HIGH (1.52 ou 1.9 ms selon window_open) -> retour pin LOW.
+; readT (lecture DS18B20) ne tourne que quand le flag Timer0 est leve,
+; donc la plupart des iterations sont rapides et le servo voit ~50 Hz.
 main:
+	; pin LOW (PF4) -- lds/sts car PORTF est en I/O etendu
+	lds	w, PORTF
+	andi	w, ~(1<<SERVO1)
+	sts	PORTF, w
+
+	WAIT_US	18000				; phase basse, le servo "se repose"
+
 	rcall	dispatch
-	; readT hors ISR : sinon servo PWM (~260ms) masque INT7 (RC5)
 	lds	w, convertT_ended
 	tst	w
 	breq	m_no_temp
 	rcall	readT
 m_no_temp:
 	rcall	lcd_refresh
+
+	; pin HIGH (PF4)
+	lds	w, PORTF
+	ori	w, (1<<SERVO1)
+	sts	PORTF, w
+
+	; largeur d'impulsion : 1.9 ms ouvert, 1.52 ms ferme
+	lds	w, window_open
+	tst	w
+	breq	m_pulse_close
+	WAIT_US	1900
+	rjmp	m_pulse_end
+m_pulse_close:
+	WAIT_US	1520
+m_pulse_end:
+
+	; on remet LOW tout de suite (pas attendre la prochaine iteration)
+	lds	w, PORTF
+	andi	w, ~(1<<SERVO1)
+	sts	PORTF, w
+
 	rjmp	main
 
 ; === mode dispatch ===
