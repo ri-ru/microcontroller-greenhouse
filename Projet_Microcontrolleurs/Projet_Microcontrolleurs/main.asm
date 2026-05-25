@@ -68,12 +68,8 @@ reset:
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
 
-	; --- ecran d'accueil (3s avant que Timer0/RC5 ne reprennent la main) ---
-	rcall	LCD_home
-	PRINTF	LCD
-.db	"Hello gardener!",0
-	WAIT_MS	3000
-	rcall	LCD_clear
+	; --- ecran d'accueil (2s avant que Timer0/RC5 ne reprennent la main) ---
+	rcall	do_splash
 
 	; etat initial
 	STI	mode_var,    MODE_NORMAL
@@ -162,8 +158,19 @@ dz_end:
 
 ; === transitions de mode ===
 to_normal:
+	lds	w, mode_var			; w = ancien mode
 	STI	mode_var, MODE_NORMAL
 	STI	lcd_dirty, 1
+	cpi	w, MODE_SLEEP
+	brne	tn_done				; vient de SET, pas de splash
+
+	; reveil de SLEEP : rallumer le LCD et refaire le splash
+	OUTI	TIMSK, 0			; suspendre Timer0 le temps du splash
+	rcall	LCD_clear
+	CW	LCD_wr_ir, 0b00001100		; LCD display = ON
+	rcall	do_splash
+	OUTI	TIMSK, (1<<TOIE0)		; reactiver Timer0
+tn_done:
 	ret
 to_set:
 	STI	mode_var, MODE_SET
@@ -383,4 +390,13 @@ show_sleep:
 	rcall	LCD_home
 	PRINTF	LCD
 .db	"Sleeping...     ",0
+	ret
+
+; ecran d'accueil partage (boot + reveil de SLEEP)
+do_splash:
+	rcall	LCD_home
+	PRINTF	LCD
+.db	"Hello gardener!",LF,"                ",0
+	WAIT_MS	2000
+	rcall	LCD_clear
 	ret
