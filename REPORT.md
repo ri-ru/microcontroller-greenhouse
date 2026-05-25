@@ -91,10 +91,12 @@ Deux sources d'interruption sont utilisées :
 - **Timer0 (overflow)** : déclenche la lecture périodique de la
   température sur le DS18B20 et le contrôle de la fenêtre. Configuré en
   mode asynchrone (`ASSR ← (1<<AS0)`, source quartz 32 kHz externe),
-  prescaler 1, l'overflow survient environ une fois par seconde. L'ISR
+  prescaler 128 (`TCCR0 = 5`), l'overflow survient environ une fois par
+  seconde (32 768 / 128 / 256 ≈ 1 Hz). L'ISR
   (`overflow0`, dans `main.asm`) lit la température, affiche la valeur
-  sur la ligne 1 du LCD, lance la prochaine conversion et applique la
-  logique de régulation (ouverture / fermeture de la fenêtre).
+  sur la ligne 1 du LCD, lance la prochaine conversion, recharge la
+  consigne courante depuis la SRAM et applique la logique de régulation
+  (ouverture / fermeture de la fenêtre).
 
 La boucle principale tourne quant à elle en *polling coopératif* : elle
 consulte les drapeaux `rc5_new` (posé par l'ISR INT7) et les valeurs de
@@ -133,14 +135,19 @@ jour du DS18B20 (750 ms) absorbe largement les ~25 ms du décodage RC5.
 
 | Fichier            | Rôle                                                 |
 | ------------------ | ---------------------------------------------------- |
-| `main.asm`         | reset, vecteurs d'interruption, boucle principale, machine à états, affichage LCD |
-| `ir_rc5.asm`       | ISR de décodage RC5 (INT7)                           |
-| `wire1_temp2.asm`  | ISR Timer0, lecture température, contrôle de la fenêtre *(R)* |
+| `main.asm`         | reset, vecteurs d'interruption, boucle principale, machine à états, ISR Timer0 (`overflow0`), affichage LCD |
+| `ir_rc5.asm`       | ISR de décodage RC5 (INT7), inclus dans `main.asm`   |
 | `lcd.asm`          | pilote HD44780U *(fourni)*                           |
 | `printf.asm`       | impression formatée *(fourni)*                       |
 | `wire1.asm`        | pilote 1-wire bas niveau *(fourni)*                  |
 | `macros.asm`       | macros AVR générales *(fourni)*                      |
 | `definitions.asm`  | définitions de registres, ports, constantes *(fourni)* |
+
+Le point d'entrée du build Atmel Studio est `main.asm` ; les autres
+fichiers du projet sont intégrés via `.include`. Le fichier
+`wire1_temp2.asm` (présent dans le dossier projet) est un programme de
+test autonome conservé comme référence pendant le développement ; il
+ne fait pas partie de l'application finale.
 
 ---
 
@@ -184,7 +191,8 @@ trame. `rc5_new` n'est levé que si le toggle a changé.
 
 **Sauvegarde du contexte** : l'ISR sauvegarde SREG (dans `_sreg`/r1) et
 empile les registres qu'elle modifie (`w`, `u`, `b0`, `b1`, `b2`), puis
-les restaure avant `reti`.
+les restaure avant `reti`. La variable de filtrage `rc5_last_tog` est en
+SRAM, indépendante des registres.
 
 ### Affichage LCD (HD44780U)
 
@@ -206,10 +214,11 @@ et l'ISR écrivaient toutes deux n'importe où, leurs séquences
 courante se retrouverait corrompue. L'écran a donc été partitionné :
 
 - **Ligne 1** (haut) appartient à `overflow0` : `LCD_home` puis
-  `PRINTF "temp=XX.YY C"`, environ une fois par seconde.
+  `PRINTF "Temp: XX.XX C"`, environ une fois par seconde.
 - **Ligne 2** (bas) appartient à `lcd_refresh` : `LCD_lf` (déplacement
   curseur en début de ligne 2, sans toucher la ligne 1) puis
-  `PRINTF` du contenu propre au mode.
+  `PRINTF` du contenu propre au mode (`Set:25C. Closed.` en NORMAL,
+  `Set:25C. <EDIT>.` en SET, `Sleeping...` en SLEEP).
 
 Comme la boucle principale tourne très vite (plusieurs milliers
 d'itérations par seconde) tandis que le rafraîchissement n'est
@@ -235,10 +244,10 @@ mode bit-bang par la librairie fournie `wire1.asm` (`wire1_init`,
 `wire1_reset`, `wire1_write`, `wire1_read`).
 
 **Cadence de lecture.** Timer0 fonctionne en mode asynchrone à partir
-du quartz externe 32 kHz (`ASSR = (1<<AS0)`, `TCCR0 = 1`,
-`TIMSK = (1<<TOIE0)`). L'overflow se produit toutes les
-~1 s, ce qui dépasse largement le temps de conversion du DS18B20
-(750 ms en résolution 12 bits).
+du quartz externe 32 kHz (`ASSR = (1<<AS0)`, `TCCR0 = 5` qui correspond
+au prescaler 128, `TIMSK = (1<<TOIE0)`). L'overflow se produit à
+32 768 / 128 / 256 ≈ 1 Hz, ce qui dépasse largement le temps de
+conversion du DS18B20 (750 ms en résolution 12 bits).
 
 **Séquence dans `overflow0`.** À chaque overflow, l'ISR :
 
@@ -247,8 +256,13 @@ du quartz externe 32 kHz (`ASSR = (1<<AS0)`, `TCCR0 = 1`,
    récupérer LSB puis MSB de la température. Le résultat est placé
    dans `a1:a0`, signed 16 bits au format DS18B20 (1/16 °C par LSB) ;
 2. l'affiche en ligne 1 du LCD via
-   `PRINTF "temp=…",FFRAC2+FSIGN,a,4,…,"C "` (le format `FFRAC2`
-   gère directement la division par 16 et l'affichage de 2 décimales) ;
+   `PRINTF "Temp: ",FFRAC2+FSIGN,a,4,$22," C "` (le format `FFRAC2`
+   avec le point décimal à la position 4 prend directement en compte
+   les 4 bits fractionnaires du DS18B20 ; `$22` demande 2 chiffres
+   entiers et 2 chiffres décimaux). La température `a1:a0` est
+   sauvegardée sur la pile avant le `PRINTF` car le formateur
+   modifie `a0..a3` pendant le formatage, puis restaurée pour la
+   comparaison à la consigne ;
 3. relance immédiatement la conversion suivante :
    `wire1_reset`, `skipROM`, `convertT` ;
 4. recharge la consigne dans `b3:b2` depuis la SRAM
@@ -277,7 +291,32 @@ X, Y, Z`.
 
 ### Servomoteur Futaba S3003
 
-*(Section à compléter par R.)*
+Le servo Futaba S3003 (module M4) est commandé par un signal PWM
+appliqué sur la broche `PB4` du STK-300. Le signal PWM est défini par
+deux paramètres : une période fixée à 20 ms (50 Hz) et une largeur
+d'impulsion variable comprise entre environ 1 ms et 2 ms, qui détermine
+la position angulaire du servo (1 ms ≈ 0°, 1,5 ms ≈ 90° (neutre),
+2 ms ≈ 180°).
+
+Deux positions sont utilisées dans le projet :
+
+- **Fenêtre fermée** : largeur d'impulsion proche de 1 ms,
+  butée gauche du servo ;
+- **Fenêtre ouverte** : largeur d'impulsion proche de 2 ms,
+  butée droite.
+
+Les sous-routines `open_window` et `close_window` (dans `main.asm`)
+constituent le point d'entrée unique de la commande servo : elles sont
+appelées soit par la boucle principale en réponse à un appui sur
+`VOL+`/`VOL-` de la télécommande (commande manuelle), soit par l'ISR
+Timer0 en fonction du résultat de la comparaison `temp` vs `consigne`
+(régulation automatique). Les deux mettent également à jour la
+variable d'état `window_open` en SRAM et lèvent `lcd_dirty` pour
+déclencher le rafraîchissement de la ligne 2 du LCD.
+
+*(Implémentation détaillée du PWM logiciel — choix du timer auxiliaire,
+des constantes de largeur d'impulsion par butée mécanique — à
+compléter par R après la calibration finale sur l'établi.)*
 
 ### Allocations mémoire
 
