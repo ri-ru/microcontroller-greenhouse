@@ -1,16 +1,9 @@
 ; file	eeprom.asm   target ATmega128L-4MHz-STK300
 ; purpose driver EEPROM interne + historique min/max temperature.
-;         Les extremes survivent au power-off (EEPROM = memoire non-volatile).
-;
 ; EEPROM map (5 octets) :
 ;   0x00          magic (0xA5)         ; 0xFF = 1er boot, 0xA5 = donnees OK
-;   0x01..0x02    min_temp (LSB, MSB)  ; format DS18B20 16-bit signe
+;   0x01..0x02    min_temp (LSB, MSB)  ; format 16-bit signé à virgule fixe entre bit4 et bit5
 ;   0x03..0x04    max_temp (LSB, MSB)
-;
-; SRAM mirror (adresses .equ dans main.asm) :
-;   min_temp (0x0267..0x0268), max_temp (0x0269..0x026A)
-; -> lectures rapides depuis l'ISR Timer0, ecriture EEPROM seulement
-;    quand un extreme change (rare).
 
 .equ	EE_MAGIC	= 0x00
 .equ	EE_MIN_LO	= 0x01
@@ -19,12 +12,7 @@
 .equ	EE_MAX_HI	= 0x04
 .equ	EE_MAGIC_OK	= 0xA5
 
-; ==============================================================
-;  eeprom_read_byte
-;  in:  ZL = adresse EEPROM (ZH = 0)
-;  out: w  = octet lu
-; ==============================================================
-eeprom_read_byte:
+eeprom_read_byte: ; ZL = adresse EEPROM (ZH = 0) ; w = read byte
 ee_rd_wait:
 	sbic	EECR, EEWE		; attendre fin d'ecriture eventuelle
 	rjmp	ee_rd_wait
@@ -34,15 +22,8 @@ ee_rd_wait:
 	in	w, EEDR
 	ret
 
-; ==============================================================
-;  eeprom_write_byte
-;  in:  ZL = adresse, w = valeur
-;  La sequence EEMWE -> EEWE doit tenir en 4 cycles : on coupe
-;  les interruptions le temps de l'amorcage. On sauve SREG plutot
-;  qu'un sei aveugle, parce que l'appelant peut deja etre dans une
-;  ISR (history_update est appelle depuis overflow0).
-; ==============================================================
-eeprom_write_byte:
+
+eeprom_write_byte: ;ZL = adresse ; w = value
 ee_wr_wait:
 	sbic	EECR, EEWE		; attendre fin d'ecriture precedente
 	rjmp	ee_wr_wait
@@ -56,13 +37,8 @@ ee_wr_wait:
 	out	SREG, u			; restaurer (ne reactive que si I etait a 1)
 	ret
 
-; ==============================================================
-;  history_init  (appelle dans reset)
-;  - lit le magic en EEPROM 0x00
-;  - si != 0xA5 : 1er boot, ecrire valeurs initiales et magic
-;  - charger min/max EEPROM dans la SRAM mirror
-; ==============================================================
-history_init:
+history_init: ; verify if the greenhouse was already booted before -> if yes load eeprom values 
+			  ;if not init at the oposites extremum possible to be overwritten by the first history_update
 	ldi	ZH, 0			; adresses EEPROM tiennent dans ZL seul
 	ldi	ZL, EE_MAGIC
 	rcall	eeprom_read_byte
@@ -84,7 +60,6 @@ history_init:
 	ldi	ZL, EE_MAX_HI
 	ldi	w, 0xFC
 	rcall	eeprom_write_byte
-	; magic en dernier : si on plante en cours d'init, on recommence
 	ldi	ZL, EE_MAGIC
 	ldi	w, EE_MAGIC_OK
 	rcall	eeprom_write_byte
@@ -106,13 +81,7 @@ hi_load:
 	sts	max_temp+1, w
 	ret
 
-; ==============================================================
-;  history_update
-;  in:  a1:a0 = temperature courante (DS18B20 signed 16-bit)
-;  Compare a min/max en SRAM. Si nouveau extreme : maj SRAM + EEPROM.
-;  Preserve a0, a1.
-; ==============================================================
-history_update:
+history_update: ; a1:a0 ;  Compare a min/max en SRAM. Si nouveau extreme : maj SRAM + EEPROM.
 	push	a0
 	push	a1
 	push	b0
@@ -120,14 +89,11 @@ history_update:
 	push	ZL
 	push	ZH
 	ldi	ZH, 0
-
-	; --- compare a min : si a1:a0 < min, nouveau min ---
 	lds	b0, min_temp
 	lds	b1, min_temp+1
 	cp	a0, b0
-	cpc	a1, b1			; flags = signed(a - min)
-	brge	hu_check_max		; a >= min -> pas plus petit
-	; nouveau min
+	cpc	a1, b1			
+	brge	hu_check_max	
 	sts	min_temp, a0
 	sts	min_temp+1, a1
 	ldi	ZL, EE_MIN_LO
@@ -138,13 +104,11 @@ history_update:
 	rcall	eeprom_write_byte
 
 hu_check_max:
-	; --- compare a max : si max < a1:a0, nouveau max ---
 	lds	b0, max_temp
 	lds	b1, max_temp+1
 	cp	b0, a0
-	cpc	b1, a1			; flags = signed(max - a)
-	brge	hu_done			; max >= a -> pas plus grand
-	; nouveau max
+	cpc	b1, a1	
+	brge	hu_done	
 	sts	max_temp, a0
 	sts	max_temp+1, a1
 	ldi	ZL, EE_MAX_LO
