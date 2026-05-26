@@ -9,7 +9,7 @@
 
 *(caméra sur la carte STK-300)*
 
-> "Bonjour, nous sommes Veronika et Raphaël, groupe G[XXX]. Notre projet
+> "Bonjour, nous sommes Veronika et Raphaëlle, groupe G[XXX]. Notre projet
 > est un **contrôleur de serre intelligent** réalisé autour de
 > l'ATmega128L sur le kit STK-300. Le système mesure la température,
 > l'affiche sur le LCD, ouvre ou ferme automatiquement une fenêtre via
