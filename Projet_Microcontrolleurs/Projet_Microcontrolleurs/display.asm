@@ -1,8 +1,5 @@
 ; file	display.asm   target ATmega128L-4MHz-STK300
-; purpose affichage LCD: ligne 1 (etat), splash, redessin sur lcd_dirty.
-;         Ligne 2 (temperature) ecrite par overflow0 dans thermo.asm.
-
-; === LCD refresh ===
+; purpose affichage LCD: ligne 1 (state) update when lcd_dirty is set, splash
 ;  Ligne 1 (haut) = etat (mode/consigne/fenetre) -- ecrite ici, seulement
 ;  quand un changement d'etat a leve lcd_dirty.
 ;  Ligne 2 (bas) = "Temp: XX.XX C" -- ecrite par overflow0 (~1 fois/s).
@@ -44,7 +41,7 @@ show_sleep:
 .db	"Sleeping...     ",0
 	ret
 
-; HISTORY : Min sur la ligne 1, Max sur la ligne 2.
+; HISTORY : Min sur la ligne du haut, Max sur la ligne du bas.
 ; Les valeurs viennent de la SRAM (mirror de l'EEPROM, charge au boot
 ; et entretenu par history_update dans thermo.asm).
 show_history:
