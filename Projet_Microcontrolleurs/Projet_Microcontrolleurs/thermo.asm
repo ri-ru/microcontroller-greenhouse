@@ -40,10 +40,6 @@ readT:
 	pop	a0
 
 	; --- controle fenetre par seuil (skip en SLEEP) ---
-	lds	w, mode_var
-	cpi	w, MODE_SLEEP
-	breq	ov_done
-
 	; recharger la consigne: b3:b2 = target_temp * 16 (format DS18B20)
 	lds	w, target_temp
 	ldi	b3, 0
@@ -67,13 +63,15 @@ readT:
 	; temp >= consigne : ouvrir si pas deja
 	lds	w, window_open
 	tst	w
-	brne	ov_done
+	brne	readT_end
 	rcall	open_window
-	rjmp	ov_done
+	rjmp	readT_end
 
 ov_close:
 	lds	w, window_open
 	tst	w
-	breq	ov_done
+	breq	readT_end
 	rcall	close_window
+readT_end:
+	STI convertT_ended, 0
 	ret

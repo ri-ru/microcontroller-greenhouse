@@ -51,6 +51,10 @@
 .org	OVF0addr
 	rjmp	overflow0		; Timer0 -> temperature (R) - dans thermo.asm
 
+.org	0x30
+overflow0:
+	STI convertT_ended, 1
+	reti
 ; --- librairies (incluses ici pour que PRINTF/LCD_* soient definis
 ;     avant reset, qui les utilise pour l'ecran d'accueil) ---
 .include "lcd.asm"
@@ -69,6 +73,7 @@ reset:
 
 	cbi	DDRE,  IR			; PE7 en entree (recepteur IR)
 	cbi	PORTE, IR			; pas de pull-up interne
+	OUTEI DDRF,0xff			; PORT7 en sortie (servo)
 
 	rcall	wire1_init			; init bus 1-wire (R: capteur DS18B20)
 	rcall	LCD_init
@@ -112,6 +117,10 @@ reset:
 main:
 	rcall	dispatch
 	rcall	lcd_refresh
+	lds w, convertT_ended
+	tst w
+	brne PC+1
+	rcall readT
 	rjmp	main
 
 ; === mode dispatch ===

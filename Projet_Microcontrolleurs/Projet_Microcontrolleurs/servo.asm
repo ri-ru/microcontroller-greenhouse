@@ -12,9 +12,9 @@
 open_window:
 	ldi w, 13
 opening:
-	P0	PORTC,SERVO1
+	OUTEI	PORTF, (0<<SERVO1)
 	WAIT_US	18100
-	P1	PORTC,SERVO1
+	OUTEI	PORTF, (1<<SERVO1)
 	WAIT_US 1900
 	dec w
 	brne opening
@@ -26,9 +26,9 @@ opening:
 close_window:
 	ldi w, 13
 closing:
-	P0	PORTC,SERVO1
+	OUTEI	PORTF, (0<<SERVO1)
 	WAIT_US	18480
-	P1	PORTC,SERVO1
+	OUTEI	PORTF, (1<<SERVO1)
 	WAIT_US 1520
 	dec w
 	brne closing
