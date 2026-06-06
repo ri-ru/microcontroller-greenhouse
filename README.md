@@ -1,6 +1,9 @@
+
 # Mini-serre
 
 Greenhouse controller for the ATmega128L on an STK-300 board. Final project for the microcontrollers course, 2026.
+
+<img width="3052" height="2274" alt="20260526_015523" src="https://github.com/user-attachments/assets/bb6e20c8-f375-4784-a88e-accc600695d6" />
 
 ## What it does
 
