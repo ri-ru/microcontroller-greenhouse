@@ -8,6 +8,9 @@ project_guidelines.pdf
 CLAUDE.md
 .claude/
 
+# Report (kept local, not in repo)
+MCU2026-G118.tex
+
 # Atmel Studio build output
 **/Debug/
 **/Release/
